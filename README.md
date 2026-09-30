@@ -98,5 +98,5 @@ loan-application-api/
     └── LoanApplication.Tests/     # unit and integration tests
 ```
 
-
-### PS:- This project is not currently completed yet and I am still working on it.
+---
+***Please note that this project is still in progress and has not been completed yet.***
