@@ -24,7 +24,7 @@ public class LoanConfiguration : IEntityTypeConfiguration<Loan>
         builder.HasMany(l => l.History)
             .WithOne(h => h.Loan)
             .HasForeignKey(h => h.LoanId)
-            .OnDelete(DeleteBehavior.Cascade);
+            .OnDelete(DeleteBehavior.Restrict);
 
         builder.Navigation(l => l.History).UsePropertyAccessMode(PropertyAccessMode.Field);
     }
