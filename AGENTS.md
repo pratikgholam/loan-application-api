@@ -28,7 +28,7 @@ The owner writes the code. Agents act as pair-programming mentors: guide, review
 - Dapper with hand-written SQL, used only for the reporting endpoint
 - JWT bearer authentication with role-based authorization
 - xUnit for unit and integration tests
-- Planned: Swagger/OpenAPI, Docker and docker-compose, GitHub Actions CI
+- Planned: Swagger/OpenAPI, Dockerfile and full-stack compose (database compose exists), GitHub Actions CI
 
 ## Solution layout
 
@@ -60,7 +60,7 @@ dotnet ef migrations add <Name> --project src/LoanApplication.Api --startup-proj
 dotnet ef database update --project src/LoanApplication.Api --startup-project src/LoanApplication.Api
 ```
 
-`database update` needs a running PostgreSQL instance, which docker-compose will provide once it exists.
+`database update` needs a running PostgreSQL instance: start it with `docker compose up -d` (see `compose.yml` at the repo root), wait for the healthcheck, then run the command.
 
 ### Startup gotcha
 
@@ -135,7 +135,7 @@ Roles: Applicant, LoanOfficer, Admin.
 ## Testing
 
 - Unit tests live in `tests/LoanApplication.Tests/LoanTests.cs` and are pure in-memory: `dotnet test` requires no database or other services.
-- Unit tests cover entities and transition rules. Every status and action combination is tested (35 tests, all passing).
+- Unit tests cover entities and transition rules. Every status and action combination is tested, plus the UTC guard on `Submit` and every transition (42 tests, all passing).
 - Integration tests are planned for later stages and will run against PostgreSQL.
 - Test names describe behavior.
 
@@ -146,9 +146,12 @@ Roles: Applicant, LoanOfficer, Admin.
 
 ## Current status
 
-- Stage 1 (domain entities and unit tests): done. 35 xUnit tests for `Loan` pass.
-- Stage 2 (EF Core): done locally. `AppDbContext` and entity configuration are written. The `InitialCreate` migration is generated. The migration has not been applied to a database. `StatusHistory` → `Loan` uses `Restrict` delete behavior to protect the audit trail. The build passes.
-- Stage 3 (docker-compose for PostgreSQL, apply the migration): next.
+- Stage 1 (domain entities and unit tests): done. 42 xUnit tests for `Loan` pass (35 original + 7 UTC-guard tests).
+- Stage 2 (EF Core): done. `AppDbContext` and entity configuration are written. The `InitialCreate` migration is generated and has been applied to a real database. `StatusHistory` → `Loan` uses `Restrict` delete behavior to protect the audit trail. The build passes.
+- Stage 3 (docker-compose for PostgreSQL, apply the migration): done. `compose.yml` runs `postgres:18-alpine` with a healthcheck and a `pgdata` volume mounted at `/var/lib/postgresql` (PG18 moved `PGDATA`; mounting the parent preserves data). The `InitialCreate` migration was applied and all four tables verified. The database was cleaned back to 0 rows after verification.
+- Stage 4 (authentication): next.
+
+A UTC guard was added to `Loan.Submit` and `ChangeStatus`: `RequireUtc` throws `ArgumentException` when the timestamp's `Kind` is not `Utc`, so bad input fails in the domain instead of at Npgsql.
 
 Remaining stages: authentication, application endpoints, Dapper reporting, integration tests, Swagger, Dockerfile and full-stack compose, GitHub Actions CI.
 
@@ -156,7 +159,7 @@ Remaining stages: authentication, application endpoints, Dapper reporting, integ
 
 The README is aspirational. Verified against the repo as of 2026-10-08:
 
-- It documents `docker compose up`, but there is no `docker-compose.yml` or `Dockerfile`.
+- It documents `docker compose up` as the way to run the whole stack, but there is no `Dockerfile` and `compose.yml` only runs the database (no API service yet).
 - Its tech stack lists Docker and GitHub Actions, but there is no `.github/workflows/` directory.
 - Its endpoint table is missing `start-review`, and its data model table still uses the old `LoanApplication` name instead of `Loan`.
 
@@ -167,8 +170,8 @@ Trust the repo over the README. Fix the README when the code catches up (see wor
 These are unverified or unfinished. Confirm each before relying on it.
 
 1. ~~README endpoint table missing `start-review`; old `LoanApplication` name.~~ Confirmed true; tracked above.
-2. Npgsql handling of `DateTime` for `timestamptz`. The belief is that values with a non-UTC kind are rejected. Verify when the database exists.
-3. Backing fields: `LoanConfiguration` and `ApplicantConfiguration` explicitly set `UsePropertyAccessMode(PropertyAccessMode.Field)` for `History` and `Loans`, but neither names a field with `HasField(...)`. Field-name resolution (`_history`, `_loans`) is therefore still by EF convention — unconfirmed until the app runs against a real database.
+2. ~~Npgsql handling of `DateTime` for `timestamptz`.~~ Confirmed against live PG18: values with `Kind=Unspecified` or `Kind=Local` are rejected with `ArgumentException: Cannot write DateTime with Kind=... to PostgreSQL type 'timestamp with time zone', only UTC is supported`, surfaced as `DbUpdateException` at `SaveChangesAsync`.
+3. ~~Backing fields.~~ Confirmed working by EF convention: a `Loan` saved with one `History` row reloads with `History.Count == 1`, and after `StartReview` it reloads with `2`. No `HasField(...)` needed.
 4. Whether `Guid.CreateVersion7()` is available in .NET 10 and whether it should replace `Guid.NewGuid()`.
-5. Remove the template `WeatherForecast` controller and model once real endpoints exist (both still present).
-6. Decide whether `Loan.Submit` and the transition methods should reject `DateTime` values whose kind is not `Utc`. This depends on item 2.
+5. ~~Remove the template `WeatherForecast` controller and model once real endpoints exist.~~ Removed: `WeatherForecastController.cs` and `WeatherForecast.cs` deleted; build and 42 tests pass.
+6. ~~Decide whether `Loan.Submit` and the transition methods should reject `DateTime` values whose kind is not `Utc`.~~ Decided yes, and implemented: `RequireUtc` in `Loan.Submit` and `ChangeStatus` throws `ArgumentException` when `Kind != Utc`, so callers fail fast in the domain instead of at the database.
