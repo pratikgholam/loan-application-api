@@ -28,7 +28,8 @@ The owner writes the code. Agents act as pair-programming mentors: guide, review
 - Dapper with hand-written SQL, used only for the reporting endpoint
 - JWT bearer authentication with role-based authorization
 - xUnit for unit and integration tests
-- Planned: Swagger/OpenAPI, Dockerfile and full-stack compose (database compose exists), GitHub Actions CI
+- Scalar (OpenAPI reference UI) for interactive API documentation
+- Planned: Dockerfile and full-stack compose (database compose exists), GitHub Actions CI
 
 ## Solution layout
 
@@ -149,11 +150,12 @@ Roles: Applicant, LoanOfficer, Admin.
 - Stage 1 (domain entities and unit tests): done. 42 xUnit tests for `Loan` pass (35 original + 7 UTC-guard tests).
 - Stage 2 (EF Core): done. `AppDbContext` and entity configuration are written. The `InitialCreate` migration is generated and has been applied to a real database. `StatusHistory` → `Loan` uses `Restrict` delete behavior to protect the audit trail. The build passes.
 - Stage 3 (docker-compose for PostgreSQL, apply the migration): done. `compose.yml` runs `postgres:18-alpine` with a healthcheck and a `pgdata` volume mounted at `/var/lib/postgresql` (PG18 moved `PGDATA`; mounting the parent preserves data). The `InitialCreate` migration was applied and all four tables verified. The database was cleaned back to 0 rows after verification.
-- Stage 4 (authentication): next.
+- Stage 4 (authentication): done. `POST /auth/register` and `POST /auth/login` implemented with JWT bearer auth (HS256, 15-min access tokens). Roles: Applicant, LoanOfficer, Admin with policies (`ApplicantOnly`, `LoanOfficerOnly`, `AdminOnly`, `LoanOfficerOrAdmin`). 28 auth-related tests pass (hasher, token service, controller via `WebApplicationFactory` + EF InMemory). Total: 70 tests passing.
+- Scalar OpenAPI UI added: `Scalar.AspNetCore` package, interactive reference at `/scalar/v1` in Development.
 
 A UTC guard was added to `Loan.Submit` and `ChangeStatus`: `RequireUtc` throws `ArgumentException` when the timestamp's `Kind` is not `Utc`, so bad input fails in the domain instead of at Npgsql.
 
-Remaining stages: authentication, application endpoints, Dapper reporting, integration tests, Swagger, Dockerfile and full-stack compose, GitHub Actions CI.
+Remaining stages: application endpoints, Dapper reporting, integration tests, Dockerfile and full-stack compose, GitHub Actions CI.
 
 ## README vs reality
 
