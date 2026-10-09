@@ -1,3 +1,4 @@
+using LoanApplication.Api.Common;
 using LoanApplication.Api.Data;
 using LoanApplication.Api.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -24,6 +25,9 @@ if (!useInMemory)
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
 builder.Services.AddSingleton<IPasswordHasher, PasswordHasher>();
 builder.Services.AddSingleton<ITokenService, TokenService>();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
+builder.Services.AddScoped<IApplicationService, ApplicationService>();
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>

@@ -42,7 +42,7 @@ public class TokenServiceTests
         var handler = new JwtSecurityTokenHandler();
         var token = handler.ReadJwtToken(tokenString);
 
-        Assert.Equal(userId.ToString(), token.Claims.First(c => c.Type == JwtRegisteredClaimNames.Sub).Value);
+        Assert.Equal(userId.ToString(), token.Claims.First(c => c.Type == ClaimTypes.NameIdentifier).Value);
         Assert.Equal(email, token.Claims.First(c => c.Type == JwtRegisteredClaimNames.Email).Value);
         Assert.Equal(role.ToString(), token.Claims.First(c => c.Type == ClaimTypes.Role).Value);
         Assert.Equal("test-issuer", token.Issuer);
