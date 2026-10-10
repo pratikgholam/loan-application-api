@@ -22,9 +22,9 @@ public sealed class ApplicationService : IApplicationService
 
         if (applicant is null)
         {
-            // This shouldn't happen in normal flow since user registers as Applicant first
-            // But we'll throw a clear error
-            throw new InvalidOperationException("Applicant profile not found. Please contact support.");
+            // Normally a registered applicant has a profile already, but the client may
+            // call POST /applications before POST /applications/profile.
+            throw new InvalidOperationException("Applicant profile not found. Please create your applicant profile first.");
         }
 
         var loan = Loan.Submit(
@@ -41,7 +41,8 @@ public sealed class ApplicationService : IApplicationService
         return MapToResponse(loan);
     }
 
-    public async Task<ApplicationResponse?> GetByIdAsync(Guid currentUserId, Guid loanId, CancellationToken ct)
+    // Applicants can only see their own loans; a non-owned id reads as 404 for security.
+    public async Task<ApplicationResponse?> GetOwnAsync(Guid applicantUserId, Guid loanId, CancellationToken ct)
     {
         var loan = await _db.Loans
             .Include(l => l.Applicant)
@@ -51,18 +52,30 @@ public sealed class ApplicationService : IApplicationService
         if (loan is null)
             return null;
 
-        // Ownership check: applicant can only see their own loans
-        if (loan.Applicant.UserId != currentUserId)
+        if (loan.Applicant.UserId != applicantUserId)
             return null; // Treat as not found for security
+
+        return MapToResponse(loan);
+    }
+
+    // Officers and admins may read any application; no ownership check applies.
+    public async Task<ApplicationResponse?> GetByIdForOfficerAsync(Guid loanId, CancellationToken ct)
+    {
+        var loan = await _db.Loans
+            .Include(l => l.Applicant)
+            .Include(l => l.History)
+            .FirstOrDefaultAsync(l => l.Id == loanId, ct);
+
+        if (loan is null)
+            return null;
 
         return MapToResponse(loan);
     }
 
     public async Task<PagedApplicationsResponse> GetPagedAsync(GetApplicationsQuery query, CancellationToken ct)
     {
-        var queryable = _db.Loans
-            .Include(l => l.Applicant)
-            .AsQueryable();
+        // No Include needed: the summary mapping uses only scalar Loan properties.
+        var queryable = _db.Loans.AsQueryable();
 
         if (query.Status.HasValue)
         {
@@ -112,7 +125,12 @@ public sealed class ApplicationService : IApplicationService
         if (loan is null)
             throw new KeyNotFoundException("Loan not found.");
 
-        if (request.Approve)
+        // Defense-in-depth: [ApiController] model validation rejects a missing Approve
+        // before the action runs, so this only triggers for direct service callers.
+        if (request.Approve is null)
+            throw new ArgumentException("An approve decision (approve or reject) must be specified.", nameof(request.Approve));
+
+        if (request.Approve.Value)
         {
             loan.Approve(officerUserId, nowUtc, request.Reason?.Trim());
         }
@@ -129,7 +147,7 @@ public sealed class ApplicationService : IApplicationService
         return MapToResponse(loan);
     }
 
-    public async Task<ApplicationResponse> WithdrawAsync(Guid applicantUserId, Guid loanId, DateTime nowUtc, CancellationToken ct)
+    public async Task<ApplicationResponse?> WithdrawAsync(Guid applicantUserId, Guid loanId, DateTime nowUtc, CancellationToken ct)
     {
         var loan = await _db.Loans
             .Include(l => l.Applicant)
@@ -139,9 +157,9 @@ public sealed class ApplicationService : IApplicationService
         if (loan is null)
             throw new KeyNotFoundException("Loan not found.");
 
-        // Ownership check
+        // Ownership check: applicants can only withdraw their own loans.
         if (loan.Applicant.UserId != applicantUserId)
-            throw new UnauthorizedAccessException("You can only withdraw your own applications.");
+            return null; // Treat as not found for security (same as GetOwnAsync)
 
         loan.Withdraw(applicantUserId, nowUtc);
         await _db.SaveChangesAsync(ct);
@@ -172,7 +190,7 @@ public sealed class ApplicationService : IApplicationService
             loan.CreatedAt
         );
 
-    public async Task<Applicant> CreateApplicantProfileAsync(Guid userId, CreateApplicantProfileRequest request, CancellationToken ct)
+    public async Task<ApplicantProfileResponse> CreateApplicantProfileAsync(Guid userId, CreateApplicantProfileRequest request, CancellationToken ct)
     {
         var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
         if (user is null)
@@ -189,6 +207,7 @@ public sealed class ApplicationService : IApplicationService
         _db.Applicants.Add(applicant);
         await _db.SaveChangesAsync(ct);
 
-        return applicant;
+        return new ApplicantProfileResponse(
+            applicant.Id, applicant.UserId, applicant.FullName, applicant.DateOfBirth, applicant.MonthlyIncome);
     }
 }

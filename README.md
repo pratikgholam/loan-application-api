@@ -30,8 +30,8 @@ Each transition is written to a status history table with the user who made the 
 
 | Role | Can do |
 |---|---|
-| Applicant | Register, submit applications, view and withdraw their own applications |
-| LoanOfficer | View all applications, review them (approve or reject), see reports |
+| Applicant | Register, create profile, submit applications, view and withdraw their own applications |
+| LoanOfficer | View all applications, start review, review them (approve or reject), see reports |
 | Admin | Everything a loan officer can do, plus reports |
 
 Users log in with email and password and receive a JWT. Role checks are enforced on the server, so an applicant cannot read someone else's application even if they know its ID.
@@ -42,10 +42,12 @@ Users log in with email and password and receive a JWT. Role checks are enforced
 |---|---|---|---|
 | POST | `/auth/register` | Public | Create an account |
 | POST | `/auth/login` | Public | Returns a JWT |
+| POST | `/applications/profile` | Applicant | Create applicant profile |
 | POST | `/applications` | Applicant | Submit an application |
-| GET | `/applications/{id}` | Applicant (own), LoanOfficer | Get one application |
-| GET | `/applications` | LoanOfficer | List applications, filter by status, paged |
-| POST | `/applications/{id}/review` | LoanOfficer | Approve or reject |
+| GET | `/applications/{id}` | Applicant (own), LoanOfficer, Admin | Get one application |
+| GET | `/applications` | LoanOfficer, Admin | List applications, filter by status, paged |
+| POST | `/applications/{id}/start-review` | LoanOfficer, Admin | Start reviewing an application |
+| POST | `/applications/{id}/review` | LoanOfficer, Admin | Approve or reject |
 | POST | `/applications/{id}/withdraw` | Applicant (own) | Withdraw an application |
 | GET | `/reports/status-summary` | LoanOfficer, Admin | Count and total amount per status |
 
@@ -55,7 +57,7 @@ Users log in with email and password and receive a JWT. Role checks are enforced
 |---|---|
 | `User` | Login credentials and role |
 | `Applicant` | The person applying: name, date of birth, monthly income |
-| `LoanApplication` | Amount, term, purpose, current status |
+| `Loan` | Amount, term, purpose, current status |
 | `StatusHistory` | One row per status change |
 
 ### Data access

@@ -48,9 +48,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization(options =>
 {
+    options.AddPolicy("ApplicantOrOfficer", p => p.RequireRole("Applicant", "LoanOfficer", "Admin"));
     options.AddPolicy("ApplicantOnly", p => p.RequireRole("Applicant"));
-    options.AddPolicy("LoanOfficerOnly", p => p.RequireRole("LoanOfficer"));
-    options.AddPolicy("AdminOnly", p => p.RequireRole("Admin"));
     options.AddPolicy("LoanOfficerOrAdmin", p => p.RequireRole("LoanOfficer", "Admin"));
 });
 

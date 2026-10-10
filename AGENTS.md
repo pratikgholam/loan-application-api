@@ -117,11 +117,12 @@ Roles: Applicant, LoanOfficer, Admin.
 |---|---|---|
 | POST | /auth/register | Public |
 | POST | /auth/login | Public |
+| POST | /applications/profile | Applicant |
 | POST | /applications | Applicant |
-| GET | /applications/{id} | Applicant (own), LoanOfficer |
-| GET | /applications | LoanOfficer (filter by status, paged) |
-| POST | /applications/{id}/start-review | LoanOfficer |
-| POST | /applications/{id}/review | LoanOfficer (approve or reject) |
+| GET | /applications/{id} | Applicant (own), LoanOfficer, Admin |
+| GET | /applications | LoanOfficer, Admin (filter by status, paged) |
+| POST | /applications/{id}/start-review | LoanOfficer, Admin |
+| POST | /applications/{id}/review | LoanOfficer, Admin (approve or reject) |
 | POST | /applications/{id}/withdraw | Applicant (own) |
 | GET | /reports/status-summary | LoanOfficer, Admin (Dapper) |
 
@@ -150,12 +151,13 @@ Roles: Applicant, LoanOfficer, Admin.
 - Stage 1 (domain entities and unit tests): done. 42 xUnit tests for `Loan` pass (35 original + 7 UTC-guard tests).
 - Stage 2 (EF Core): done. `AppDbContext` and entity configuration are written. The `InitialCreate` migration is generated and has been applied to a real database. `StatusHistory` → `Loan` uses `Restrict` delete behavior to protect the audit trail. The build passes.
 - Stage 3 (docker-compose for PostgreSQL, apply the migration): done. `compose.yml` runs `postgres:18-alpine` with a healthcheck and a `pgdata` volume mounted at `/var/lib/postgresql` (PG18 moved `PGDATA`; mounting the parent preserves data). The `InitialCreate` migration was applied and all four tables verified. The database was cleaned back to 0 rows after verification.
-- Stage 4 (authentication): done. `POST /auth/register` and `POST /auth/login` implemented with JWT bearer auth (HS256, 15-min access tokens). Roles: Applicant, LoanOfficer, Admin with policies (`ApplicantOnly`, `LoanOfficerOnly`, `AdminOnly`, `LoanOfficerOrAdmin`). 28 auth-related tests pass (hasher, token service, controller via `WebApplicationFactory` + EF InMemory). Total: 70 tests passing.
+- Stage 4 (authentication): done. `POST /auth/register` and `POST /auth/login` implemented with JWT bearer auth (HS256, 15-min access tokens). Roles: Applicant, LoanOfficer, Admin with policies (`ApplicantOnly`, `LoanOfficerOrAdmin`, `ApplicantOrOfficer`). 28 auth-related tests pass (hasher, token service, controller via `WebApplicationFactory` + EF InMemory). Total: 70 tests passing.
 - Scalar OpenAPI UI added: `Scalar.AspNetCore` package, interactive reference at `/scalar/v1` in Development.
+- Stage 5 (application endpoints): done. `POST /applications/profile`, `POST /applications`, `GET /applications/{id}`, `GET /applications`, `POST /applications/{id}/start-review`, `POST /applications/{id}/review`, `POST /applications/{id}/withdraw` implemented with full authorization and status-transition validation. 31 endpoint integration tests pass via `WebApplicationFactory` + EF InMemory (each test uses an isolated in-memory database). Ownership failures return 404 uniformly (`GetById`, `Withdraw`). Total: 101 tests passing.
 
 A UTC guard was added to `Loan.Submit` and `ChangeStatus`: `RequireUtc` throws `ArgumentException` when the timestamp's `Kind` is not `Utc`, so bad input fails in the domain instead of at Npgsql.
 
-Remaining stages: application endpoints, Dapper reporting, integration tests, Dockerfile and full-stack compose, GitHub Actions CI.
+Remaining stages: Dapper reporting, integration tests (PostgreSQL-backed), Dockerfile and full-stack compose, GitHub Actions CI.
 
 ## README vs reality
 
@@ -173,7 +175,7 @@ These are unverified or unfinished. Confirm each before relying on it.
 
 1. ~~README endpoint table missing `start-review`; old `LoanApplication` name.~~ Confirmed true; tracked above.
 2. ~~Npgsql handling of `DateTime` for `timestamptz`.~~ Confirmed against live PG18: values with `Kind=Unspecified` or `Kind=Local` are rejected with `ArgumentException: Cannot write DateTime with Kind=... to PostgreSQL type 'timestamp with time zone', only UTC is supported`, surfaced as `DbUpdateException` at `SaveChangesAsync`.
-3. ~~Backing fields.~~ Confirmed working by EF convention: a `Loan` saved with one `History` row reloads with `History.Count == 1`, and after `StartReview` it reloads with `2`. No `HasField(...)` needed.
+3. ~~Backing fields.~~ Confirmed working by EF convention and configured in `LoanConfiguration.cs:29` via `UsePropertyAccessMode(PropertyAccessMode.Field)`: a `Loan` saved with one `History` row reloads with `History.Count == 1`, and after `StartReview` it reloads with `2`. No `HasField(...)` needed.
 4. Whether `Guid.CreateVersion7()` is available in .NET 10 and whether it should replace `Guid.NewGuid()`.
 5. ~~Remove the template `WeatherForecast` controller and model once real endpoints exist.~~ Removed: `WeatherForecastController.cs` and `WeatherForecast.cs` deleted; build and 42 tests pass.
 6. ~~Decide whether `Loan.Submit` and the transition methods should reject `DateTime` values whose kind is not `Utc`.~~ Decided yes, and implemented: `RequireUtc` in `Loan.Submit` and `ChangeStatus` throws `ArgumentException` when `Kind != Utc`, so callers fail fast in the domain instead of at the database.

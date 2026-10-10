@@ -1,6 +1,5 @@
 using LoanApplication.Api.Common;
 using LoanApplication.Api.DTOs;
-using LoanApplication.Api.Entities;
 using LoanApplication.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -24,7 +23,7 @@ public sealed class ApplicationsController : ControllerBase
     // POST /applications/profile - Applicant creates their profile (required before applying)
     [HttpPost("profile")]
     [Authorize(Policy = "ApplicantOnly")]
-    public async Task<ActionResult<Applicant>> CreateProfile(
+    public async Task<ActionResult<ApplicantProfileResponse>> CreateProfile(
         [FromBody] CreateApplicantProfileRequest request,
         CancellationToken ct)
     {
@@ -32,7 +31,10 @@ public sealed class ApplicationsController : ControllerBase
         try
         {
             var applicant = await _applicationService.CreateApplicantProfileAsync(userId, request, ct);
-            return CreatedAtAction(nameof(GetById), new { id = applicant.Id }, applicant);
+            // Profile records are always owned by the authenticated user, so there is no fetchable
+            // profile URL; a 200 response with the created record is returned instead of 201.
+            return Ok(new ApplicantProfileResponse(
+                applicant.Id, applicant.UserId, applicant.FullName, applicant.DateOfBirth, applicant.MonthlyIncome));
         }
         catch (InvalidOperationException ex)
         {
@@ -52,17 +54,28 @@ public sealed class ApplicationsController : ControllerBase
         CancellationToken ct)
     {
         var userId = _currentUser.GetUserId();
-        var loan = await _applicationService.CreateAsync(userId, request, DateTime.UtcNow, ct);
-        return CreatedAtAction(nameof(GetById), new { id = loan.Id }, loan);
+        try
+        {
+            var loan = await _applicationService.CreateAsync(userId, request, DateTime.UtcNow, ct);
+            return CreatedAtAction(nameof(GetById), new { id = loan.Id }, loan);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
     }
 
     // GET /applications/{id} - Applicant views their own application, LoanOfficer views any
     [HttpGet("{id:guid}")]
-    [Authorize(Policy = "ApplicantOnly")] // LoanOfficer can also access via separate check
+    [Authorize(Policy = "ApplicantOrOfficer")]
     public async Task<ActionResult<ApplicationResponse>> GetById(Guid id, CancellationToken ct)
     {
         var userId = _currentUser.GetUserId();
-        var loan = await _applicationService.GetByIdAsync(userId, id, ct);
+        // Officers read any application; applicants are restricted to their own loans
+        // by GetOwnAsync, so the wrong method cannot be called by accident.
+        var loan = _currentUser.IsOfficer()
+            ? await _applicationService.GetByIdForOfficerAsync(id, ct)
+            : await _applicationService.GetOwnAsync(userId, id, ct);
 
         if (loan is null)
             return NotFound(new { error = "Application not found." });
@@ -70,9 +83,9 @@ public sealed class ApplicationsController : ControllerBase
         return Ok(loan);
     }
 
-    // GET /applications - LoanOfficer lists applications with pagination and optional status filter
+    // GET /applications - LoanOfficer/Admin lists applications with pagination and optional status filter
     [HttpGet]
-    [Authorize(Policy = "LoanOfficerOnly")]
+    [Authorize(Policy = "LoanOfficerOrAdmin")]
     public async Task<ActionResult<PagedApplicationsResponse>> GetAll(
         [FromQuery] GetApplicationsQuery query,
         CancellationToken ct)
@@ -81,9 +94,9 @@ public sealed class ApplicationsController : ControllerBase
         return Ok(result);
     }
 
-    // POST /applications/{id}/start-review - LoanOfficer starts reviewing an application
+    // POST /applications/{id}/start-review - LoanOfficer/Admin starts reviewing an application
     [HttpPost("{id:guid}/start-review")]
-    [Authorize(Policy = "LoanOfficerOnly")]
+    [Authorize(Policy = "LoanOfficerOrAdmin")]
     public async Task<ActionResult<ApplicationResponse>> StartReview(Guid id, CancellationToken ct)
     {
         var officerId = _currentUser.GetUserId();
@@ -102,9 +115,9 @@ public sealed class ApplicationsController : ControllerBase
         }
     }
 
-    // POST /applications/{id}/review - LoanOfficer approves or rejects an application
+    // POST /applications/{id}/review - LoanOfficer/Admin approves or rejects an application
     [HttpPost("{id:guid}/review")]
-    [Authorize(Policy = "LoanOfficerOnly")]
+    [Authorize(Policy = "LoanOfficerOrAdmin")]
     public async Task<ActionResult<ApplicationResponse>> Review(
         Guid id,
         [FromBody] ReviewApplicationRequest request,
@@ -139,15 +152,11 @@ public sealed class ApplicationsController : ControllerBase
         try
         {
             var loan = await _applicationService.WithdrawAsync(userId, id, DateTime.UtcNow, ct);
+
+            if (loan is null)
+                return NotFound(new { error = "Application not found." });
+
             return Ok(loan);
-        }
-        catch (KeyNotFoundException)
-        {
-            return NotFound(new { error = "Application not found." });
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return Forbid(); // or NotFound for security through obscurity
         }
         catch (InvalidOperationException ex)
         {

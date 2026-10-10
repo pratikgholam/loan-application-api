@@ -8,6 +8,7 @@ public interface ICurrentUserService
 {
     Guid GetUserId();
     UserRole GetRole();
+    bool IsOfficer();
 }
 
 public sealed class CurrentUserService : ICurrentUserService
@@ -31,5 +32,14 @@ public sealed class CurrentUserService : ICurrentUserService
         var roleClaim = _httpContextAccessor.HttpContext?.User.FindFirst(ClaimTypes.Role)
             ?? throw new UnauthorizedAccessException("Role claim not found.");
         return Enum.Parse<UserRole>(roleClaim.Value);
+    }
+
+    public bool IsOfficer()
+    {
+        var roleClaim = _httpContextAccessor.HttpContext?.User.FindFirst(ClaimTypes.Role);
+        if (roleClaim is null)
+            return false;
+        return Enum.TryParse<UserRole>(roleClaim.Value, out var role) &&
+               role is UserRole.LoanOfficer or UserRole.Admin;
     }
 }
