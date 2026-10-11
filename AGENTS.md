@@ -136,9 +136,9 @@ Roles: Applicant, LoanOfficer, Admin.
 
 ## Testing
 
-- Unit tests live in `tests/LoanApplication.Tests/LoanTests.cs` and are pure in-memory: `dotnet test` requires no database or other services.
+- Unit tests live in `tests/LoanApplication.Tests/LoanTests.cs` and are pure in-memory: they need no database or other services.
 - Unit tests cover entities and transition rules. Every status and action combination is tested, plus the UTC guard on `Submit` and every transition (42 tests, all passing).
-- Integration tests are planned for later stages and will run against PostgreSQL.
+- PostgreSQL-backed integration tests live in `tests/LoanApplication.Tests/PostgresIntegrationTests.cs` and run against a real `postgres:18-alpine` container via Testcontainers. They **require Docker**. Filter them out with `--filter "FullyQualifiedName!~PostgresIntegrationTests"` to run the no-Docker subset.
 - Test names describe behavior.
 
 ## Git and repository hygiene
@@ -161,7 +161,28 @@ A UTC guard was added to `Loan.Submit` and `ChangeStatus`: `RequireUtc` throws `
   - Verified against live PostgreSQL on 2026-10-11. `StatusSummaryDto.Count` is `long`, not `int`: PostgreSQL returns `COUNT(*)` as `bigint` and Dapper's constructor matching requires an exact type match, otherwise it throws `InvalidOperationException: A parameterless default constructor or one matching signature (System.String status, System.Int64 count, System.Decimal totalamount) is required`. `SUM("Amount")` returns `numeric` and maps to `decimal` cleanly. An empty table returns zero rows, so no `NULL` sum reaches the DTO.
   - `Loan.Status` is stored as `varchar` (`LoanConfiguration.cs:16`), so the SQL groups on text values, not the enum's integers.
 
-Remaining stages: integration tests (PostgreSQL-backed), Dockerfile and full-stack compose.
+- Stage 7 (PostgreSQL-backed integration tests): done. Added `Testcontainers.PostgreSql` to the test project. Created `PostgresFixture` (xUnit collection fixture) that spins up `postgres:18-alpine` on a random host port, runs the real `InitialCreate` migration (not `EnsureCreated`), and provides an `AppDbContext` factory. 8 tests in `PostgresIntegrationTests.cs` verify:
+  - No pending migrations remain after fixture startup, and all four tables (`Users`, `Applicants`, `Loans`, `StatusHistories`) exist
+  - `Loan` save/reload `History.Count == 1`, then `StartReview` reload `== 2`
+  - `ReportService.GetStatusSummaryAsync` groups correctly on live PG; `Count` is `long`, `TotalAmount` is `decimal`
+  - Empty table returns zero rows
+  - `StatusHistory.LoanId` FK `Restrict` blocks `DELETE` from `Loans` when history exists — asserted on exact SQLSTATE `23001` (`restrict_violation`), not merely any FK error, so `NO ACTION` would not pass
+  - `Loan.Status` stored as `varchar` text ("Submitted") not integer (1)
+
+Total: 116 tests passing (108 unit/InMemory + 8 PostgreSQL).
+
+**Docker is now required for the full test run.** This contradicts the earlier "testing" section that says `dotnet test` needs no database or other services; that statement now holds only for the non-PostgreSQL subset. `PostgresFixture.InitializeAsync` calls `StartAsync()`, which throws when no Docker endpoint is reachable, and xUnit fails every test in the collection when a fixture throws — so a plain `dotnet test` without Docker fails rather than skipping. To run only the tests that need no Docker:
+
+```
+dotnet test --filter "FullyQualifiedName!~PostgresIntegrationTests"
+```
+
+Verified 2026-10-11: that filter passes 108/108 with no Docker. Note that overriding `DOCKER_HOST` does **not** simulate an absent Docker, because Testcontainers falls back to the default `unix:///var/run/docker.sock` context.
+
+  - The UTC-guard cases (`Unspecified`/`Local` `DateTime` → `ArgumentException`) deliberately stay in `LoanTests.cs`, not here: they never reach the database, so they are unit tests and duplicating them in this collection only added Docker latency.
+  - `PostgresFixture` reads `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` from environment (defaults `loanapp`/`loanapp`/`loanapp`), matching the `compose.yml` convention (`${POSTGRES_PASSWORD:-...}`). No credentials literals remain in source.
+
+Remaining stages: Dockerfile and full-stack compose.
 
 ## README vs reality
 

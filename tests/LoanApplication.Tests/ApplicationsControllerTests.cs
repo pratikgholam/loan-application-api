@@ -10,6 +10,7 @@ using LoanApplication.Api.Entities;
 using LoanApplication.Api.Services;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace LoanApplication.Tests;
@@ -95,6 +96,24 @@ public class ApplicationsControllerTests : IDisposable
             builder.UseSetting("Jwt:Audience", "loan-application-api");
             builder.UseSetting("Jwt:Key", "bW9ja19zZWNyZXRfa2V5X2Zvcl9kZXZlbG9wbWVudF9vbmx5XzMyX2J5dGVzXzEyMzQ=");
             builder.UseSetting("Jwt:AccessTokenMinutes", "15");
+            // Suppress "Failed to determine the https port for redirect" noise:
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.Sources.Add(new Microsoft.Extensions.Configuration.Memory.MemoryConfigurationSource
+                {
+                    InitialData = new Dictionary<string, string?>
+                    {
+                        ["ASPNETCORE_URLS"] = "http://localhost"
+                    }
+                });
+            });
+            builder.ConfigureServices(services =>
+            {
+                services.Configure<LoggerFilterOptions>(options =>
+                {
+                    options.AddFilter("Microsoft.AspNetCore.HttpsPolicy.HttpsRedirectionMiddleware", LogLevel.Error);
+                });
+            });
 
             builder.ConfigureServices(services =>
             {
