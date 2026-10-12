@@ -29,7 +29,7 @@ The owner writes the code. Agents act as pair-programming mentors: guide, review
 - JWT bearer authentication with role-based authorization
 - xUnit for unit and integration tests
 - Scalar (OpenAPI reference UI) for interactive API documentation
-- Planned: Dockerfile and full-stack compose (database compose exists; no GitHub Actions — out of scope, decided 2026-10-11)
+- Dockerfile (multi-stage: SDK → ASP.NET runtime) and full-stack compose (API + PostgreSQL with healthcheck, `.env` for secrets; no GitHub Actions — out of scope, decided 2026-10-11)
 
 ## Solution layout
 
@@ -182,15 +182,17 @@ Verified 2026-10-11: that filter passes 108/108 with no Docker. Note that overri
   - The UTC-guard cases (`Unspecified`/`Local` `DateTime` → `ArgumentException`) deliberately stay in `LoanTests.cs`, not here: they never reach the database, so they are unit tests and duplicating them in this collection only added Docker latency.
   - `PostgresFixture` reads `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` from environment (defaults `loanapp`/`loanapp`/`loanapp`), matching the `compose.yml` convention (`${POSTGRES_PASSWORD:-...}`). No credentials literals remain in source.
 
-Remaining stages: Dockerfile and full-stack compose.
+- Stage 8 (Dockerfile + full-stack compose): done. `Dockerfile` uses multi-stage build (`mcr.microsoft.com/dotnet/sdk:10.0` → `mcr.microsoft.com/dotnet/aspnet:10.0`), publishes API project only. `compose.yml` defines `api` (port 8080) and `db` services with `depends_on: db:condition: service_healthy`. All secrets via gitignored `.env` (`POSTGRES_PASSWORD`, `JWT_KEY`, `ASPNETCORE_ENVIRONMENT`). `.dockerignore` excludes `tests/`, build output, IDE files, and secret configs. Verified: `docker compose up --build -d` starts both services, migrations apply, full API flow works (register → login → profile → submit → get), data persists via `pgdata` volume. 108 unit/InMemory tests pass.
+
+Remaining stages: none.
 
 ## README vs reality
 
-The README is aspirational. Verified against the repo as of 2026-10-08:
+The README now matches the repo (verified 2026-10-12):
 
-- It documents `docker compose up` as the way to run the whole stack, but there is no `Dockerfile` and `compose.yml` only runs the database (no API service yet).
-- Its tech stack lists GitHub Actions, but GitHub Actions is out of scope (decided 2026-10-11) so that README entry is to be removed, not implemented.
-- Its endpoint table is missing `start-review`, and its data model table still uses the old `LoanApplication` name instead of `Loan`.
+- `docker compose up --build -d` runs the full stack (API + DB). `Dockerfile` exists.
+- GitHub Actions entry removed (out of scope).
+- Endpoint table includes `start-review`; data model uses `Loan` (not `LoanApplication`).
 
 Trust the repo over the README. Fix the README when the code catches up (see working agreement).
 

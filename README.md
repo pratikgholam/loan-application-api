@@ -72,7 +72,6 @@ The API uses **EF Core** for most reads and writes, with migrations managing the
 - JWT bearer authentication with role-based authorization
 - xUnit for unit and integration tests
 - Docker and docker-compose
-- GitHub Actions for CI
 
 ## Running it locally
 
@@ -81,13 +80,26 @@ You need the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) an
 ```bash
 git clone https://github.com/pratikgholam/loan-application-api.git
 cd loan-application-api
-docker compose up
+docker compose up --build -d
 ```
 
-Run the tests with:
+The API starts on `http://localhost:8080`. Interactive API reference (Scalar) at `http://localhost:8080/scalar/v1`.
+
+Apply EF Core migrations on first run (or after schema changes):
 
 ```bash
+# With Docker running, in a separate terminal
+dotnet ef database update --project src/LoanApplication.Api --startup-project src/LoanApplication.Api
+```
+
+Run the tests:
+
+```bash
+# All tests (requires Docker for Postgres-backed integration tests)
 dotnet test
+
+# Unit tests only (no Docker required)
+dotnet test --filter "FullyQualifiedName!~PostgresIntegrationTests"
 ```
 
 ## Project structure
@@ -99,6 +111,3 @@ loan-application-api/
 └── tests/
     └── LoanApplication.Tests/     # unit and integration tests
 ```
-
----
-***Please note that this project is still in progress and has not been completed yet.***
