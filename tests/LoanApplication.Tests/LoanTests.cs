@@ -224,6 +224,36 @@ public class LoanTests
         Assert.Equal(countBefore, loan.History.Count);
     }
 
+    // ---------- UTC guard ----------
+
+    [Theory]
+    [InlineData(DateTimeKind.Unspecified)]
+    [InlineData(DateTimeKind.Local)]
+    public void Submit_WithNonUtcTimestamp_Throws(DateTimeKind kind)
+    {
+        var at = new DateTime(2026, 1, 1, 12, 0, 0, kind);
+
+        Assert.Throws<ArgumentException>(() =>
+            Loan.Submit(ApplicantId, ApplicantUserId, 1000m, 12, "Car", at));
+    }
+
+    [Theory]
+    [MemberData(nameof(ValidTransitions))]
+    public void ValidTransition_WithNonUtcTimestamp_ThrowsAndLeavesLoanUnchanged(LoanStatus from, Step step)
+    {
+        foreach (var kind in new[] { DateTimeKind.Unspecified, DateTimeKind.Local })
+        {
+            var loan = InState(from);
+            var countBefore = loan.History.Count;
+            var bad = new DateTime(T0.AddDays(1).Ticks, kind);
+
+            Assert.Throws<ArgumentException>(() => Apply(loan, step, bad));
+
+            Assert.Equal(from, loan.Status);
+            Assert.Equal(countBefore, loan.History.Count);
+        }
+    }
+
     // ---------- Encapsulation ----------
 
     [Fact]

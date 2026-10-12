@@ -1,0 +1,35 @@
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: loanapp
+      POSTGRES_USER: loanapp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loanapp -d loanapp"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+      ConnectionStrings__Default: "Host=db;Port=5432;Database=loanapp;Username=loanapp;Password=${POSTGRES_PASSWORD}"
+      Jwt__Issuer: "loan-application-api"
+      Jwt__Audience: "loan-application-api"
+      Jwt__Key: ${JWT_KEY}
+      Jwt__AccessTokenMinutes: "15"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

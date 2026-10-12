@@ -22,6 +22,7 @@ public class Loan
             throw new ArgumentOutOfRangeException(nameof(termMonths), "Term must be greater than zero.");
         if (string.IsNullOrWhiteSpace(purpose))
             throw new ArgumentException("Purpose is required.", nameof(purpose));
+        RequireUtc(nowUtc, nameof(nowUtc));
 
         var loan = new Loan
         {
@@ -73,11 +74,18 @@ public class Loan
 
     private void ChangeStatus(LoanStatus to, Guid changedByUserId, DateTime nowUtc, string? note)
     {
+        RequireUtc(nowUtc, nameof(nowUtc));
         if (!IsAllowed(Status, to))
             throw new InvalidOperationException($"Cannot change status from {Status} to {to}.");
 
         _history.Add(new StatusHistory(Id, Status, to, changedByUserId, nowUtc, note));
         Status = to;
+    }
+
+    private static void RequireUtc(DateTime value, string paramName)
+    {
+        if (value.Kind != DateTimeKind.Utc)
+            throw new ArgumentException("Timestamp must be UTC.", paramName);
     }
 
     private static bool IsAllowed(LoanStatus from, LoanStatus to) => (from, to) switch
