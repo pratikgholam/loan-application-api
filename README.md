@@ -31,13 +31,7 @@ Applicants submit and track their applications. Loan officers review them and ap
 
 ## Application Workflow
 
-```
-Submitted ──► UnderReview ──► Approved
-                    │
-                    └───────► Rejected
-
-Submitted / UnderReview ──► Withdrawn   (applicant only)
-```
+<img title="a title" alt="Alt text" src="/flowchart.png">
 
 Each transition is stored in the `StatusHistory` table with the user, timestamp, and an optional note.
 
