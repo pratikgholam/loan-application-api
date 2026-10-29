@@ -36,7 +36,7 @@ public sealed class AuthController : ControllerBase
             return BadRequest(new { error = "Invalid email format." });
 
         if (!IsValidPassword(request.Password))
-            return BadRequest(new { error = "Password must be 8-12 characters." });
+            return BadRequest(new { error = "Password must be 8-128 characters." });
 
         var normalizedEmail = request.Email.Trim().ToLowerInvariant();
 
@@ -48,9 +48,18 @@ public sealed class AuthController : ControllerBase
         var user = new User(normalizedEmail, passwordHash, UserRole.Applicant);
 
         _db.Users.Add(user);
-        await _db.SaveChangesAsync(ct);
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            // Two concurrent registrations with the same email both pass the
+            // pre-check above; the unique index rejects the loser here.
+            return Conflict(new { error = "Email already registered." });
+        }
 
-        return CreatedAtAction(nameof(Register), new { id = user.Id }, user.Id);
+        return Created(string.Empty, user.Id);
     }
 
     [HttpPost("login")]
@@ -89,6 +98,6 @@ public sealed class AuthController : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(password)) return false;
         var len = password.Length;
-        return len >= 8 && len <= 12;
+        return len >= 8 && len <= 128;
     }
 }

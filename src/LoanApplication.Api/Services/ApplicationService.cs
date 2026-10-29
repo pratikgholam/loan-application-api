@@ -16,14 +16,12 @@ public sealed class ApplicationService : IApplicationService
 
     public async Task<ApplicationResponse> CreateAsync(Guid applicantUserId, CreateApplicationRequest request, DateTime nowUtc, CancellationToken ct)
     {
-        // Find or create applicant profile for this user
+        // An applicant profile is required before submitting an application.
         var applicant = await _db.Applicants
             .FirstOrDefaultAsync(a => a.UserId == applicantUserId, ct);
 
         if (applicant is null)
         {
-            // Normally a registered applicant has a profile already, but the client may
-            // call POST /applications before POST /applications/profile.
             throw new InvalidOperationException("Applicant profile not found. Please create your applicant profile first.");
         }
 
@@ -111,7 +109,16 @@ public sealed class ApplicationService : IApplicationService
             throw new KeyNotFoundException("Loan not found.");
 
         loan.StartReview(officerUserId, nowUtc);
-        await _db.SaveChangesAsync(ct);
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Concurrency token on Loan.Status rejects stale writes; surface as a
+            // 409 Conflict so callers can reload and retry instead of getting a 500.
+            throw new InvalidOperationException("The application was changed by another user. Please reload and try again.");
+        }
 
         return MapToResponse(loan);
     }
@@ -143,7 +150,14 @@ public sealed class ApplicationService : IApplicationService
             loan.Reject(officerUserId, nowUtc, reason);
         }
 
-        await _db.SaveChangesAsync(ct);
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw new InvalidOperationException("The application was changed by another user. Please reload and try again.");
+        }
         return MapToResponse(loan);
     }
 
@@ -162,7 +176,14 @@ public sealed class ApplicationService : IApplicationService
             return null; // Treat as not found for security (same as GetOwnAsync)
 
         loan.Withdraw(applicantUserId, nowUtc);
-        await _db.SaveChangesAsync(ct);
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw new InvalidOperationException("The application was changed by another user. Please reload and try again.");
+        }
 
         return MapToResponse(loan);
     }

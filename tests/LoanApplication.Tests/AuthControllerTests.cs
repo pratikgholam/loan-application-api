@@ -123,7 +123,8 @@ public class AuthControllerTests : IDisposable
     [Fact]
     public async Task Register_PasswordTooLong_ReturnsBadRequest()
     {
-        var request = new { Email = "long@example.com", Password = "ThisPasswordIsWayTooLong123" };
+        // 129 chars, above the 128 ceiling
+        var request = new { Email = "long@example.com", Password = new string('P', 129) };
 
         var response = await _client.PostAsJsonAsync("/auth/register", request);
 

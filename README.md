@@ -98,10 +98,11 @@ The API is available at `http://localhost:8080`, with the Scalar reference at `h
 
 ### Apply database migrations
 
-Run on first start and after any schema change, with the containers running:
+Migrations apply automatically on API startup, so `docker compose up --build -d` alone creates the schema — no separate `dotnet ef database update` step is needed.
+
+To apply migrations without starting the API (e.g. in CI), run:
 
 ```bash
-dotnet tool install --global dotnet-ef   # once, if not already installed
 dotnet ef database update \
   --project src/LoanApplication.Api \
   --startup-project src/LoanApplication.Api

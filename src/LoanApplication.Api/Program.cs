@@ -34,6 +34,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
         var jwtOptions = builder.Configuration.GetSection("Jwt").Get<JwtOptions>()!;
+        if (Encoding.UTF8.GetBytes(jwtOptions.Key).Length < 32)
+            throw new InvalidOperationException("JWT signing key must be at least 32 bytes for HS256.");
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
@@ -61,6 +63,16 @@ builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
+
+// Apply pending migrations on startup so a fresh database (e.g. from
+// `docker compose up`) is usable without an out-of-band `dotnet ef database update`.
+// Skipped when UseInMemoryDatabase is set; the test factory registers its own InMemory context.
+if (!useInMemory)
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await db.Database.MigrateAsync();
+}
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

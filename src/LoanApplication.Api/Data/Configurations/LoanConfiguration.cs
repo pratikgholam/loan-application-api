@@ -13,7 +13,7 @@ public class LoanConfiguration : IEntityTypeConfiguration<Loan>
 
         builder.Property(l => l.Amount).HasPrecision(18, 2);
         builder.Property(l => l.Purpose).IsRequired().HasMaxLength(500);
-        builder.Property(l => l.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
+        builder.Property(l => l.Status).HasConversion<string>().HasMaxLength(20).IsRequired().IsConcurrencyToken();
         builder.HasIndex(l => l.Status); // used by the filtered list endpoint
 
         builder.HasOne(l => l.Applicant)
