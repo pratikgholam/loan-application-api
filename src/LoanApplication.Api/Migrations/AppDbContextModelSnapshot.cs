@@ -71,6 +71,7 @@ namespace LoanApplication.Api.Migrations
                         .HasColumnType("character varying(500)");
 
                     b.Property<string>("Status")
+                        .IsConcurrencyToken()
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");

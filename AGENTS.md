@@ -157,7 +157,7 @@ Roles: Applicant, LoanOfficer, Admin.
 
 A UTC guard was added to `Loan.Submit` and `ChangeStatus`: `RequireUtc` throws `ArgumentException` when the timestamp's `Kind` is not `Utc`, so bad input fails in the domain instead of at Npgsql.
 
-- Stage 6 (Dapper reporting): done. `GET /reports/status-summary` implemented with Dapper hand-written SQL (`GROUP BY "Status"` returning count and total amount per status). `ReportsController` with `LoanOfficerOrAdmin` policy. Dapper 2.1.89 + Npgsql 10.0.3 packages added. 4 controller tests (2 happy path, 403 for Applicant, 401 anonymous) use a fake `IReportService` because EF InMemory cannot serve raw SQL. 3 `ReportService` unit tests cover the connection-string guard. Total: 108 tests passing.
+- Stage 6 (Dapper reporting): done. `GET /reports/status-summary` implemented with Dapper hand-written SQL (`GROUP BY "Status"` returning count and total amount per status). `ReportsController` with `LoanOfficerOrAdmin` policy. Dapper 2.1.89 + Npgsql 10.0.3 packages added. 4 controller tests (2 happy path, 403 for Applicant, 401 anonymous) use a fake `IReportService` because EF InMemory cannot serve raw SQL. 3 `ReportService` unit tests cover the connection-string guard. Total: 99 tests passing.
   - Verified against live PostgreSQL on 2026-10-11. `StatusSummaryDto.Count` is `long`, not `int`: PostgreSQL returns `COUNT(*)` as `bigint` and Dapper's constructor matching requires an exact type match, otherwise it throws `InvalidOperationException: A parameterless default constructor or one matching signature (System.String status, System.Int64 count, System.Decimal totalamount) is required`. `SUM("Amount")` returns `numeric` and maps to `decimal` cleanly. An empty table returns zero rows, so no `NULL` sum reaches the DTO.
   - `Loan.Status` is stored as `varchar` (`LoanConfiguration.cs:16`), so the SQL groups on text values, not the enum's integers.
 
@@ -169,7 +169,7 @@ A UTC guard was added to `Loan.Submit` and `ChangeStatus`: `RequireUtc` throws `
   - `StatusHistory.LoanId` FK `Restrict` blocks `DELETE` from `Loans` when history exists — asserted on exact SQLSTATE `23001` (`restrict_violation`), not merely any FK error, so `NO ACTION` would not pass
   - `Loan.Status` stored as `varchar` text ("Submitted") not integer (1)
 
-Total: 116 tests passing (108 unit/InMemory + 8 PostgreSQL).
+Total: 107 tests passing (99 unit/InMemory + 8 PostgreSQL).
 
 **Docker is now required for the full test run.** This contradicts the earlier "testing" section that says `dotnet test` needs no database or other services; that statement now holds only for the non-PostgreSQL subset. `PostgresFixture.InitializeAsync` calls `StartAsync()`, which throws when no Docker endpoint is reachable, and xUnit fails every test in the collection when a fixture throws — so a plain `dotnet test` without Docker fails rather than skipping. To run only the tests that need no Docker:
 

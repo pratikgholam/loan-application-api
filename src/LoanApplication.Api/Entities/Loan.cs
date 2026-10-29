@@ -52,8 +52,7 @@ public class Loan
     public LoanStatus Status { get; private set; }
     public DateTime CreatedAt { get; private set; } // UTC
 
-    //public IReadOnlyCollection<StatusHistory> History => _history;
-    public IReadOnlyCollection<StatusHistory> History => _history.AsReadOnly(); 
+    public IReadOnlyCollection<StatusHistory> History => _history.AsReadOnly();
 
     public void StartReview(Guid officerUserId, DateTime nowUtc)
         => ChangeStatus(LoanStatus.UnderReview, officerUserId, nowUtc, note: null);

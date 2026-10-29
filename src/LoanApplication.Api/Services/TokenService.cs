@@ -43,33 +43,6 @@ public sealed class TokenService : ITokenService
 
         return _handler.WriteToken(token);
     }
-
-    public ClaimsPrincipal? ValidateToken(string token)
-    {
-        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.Key));
-
-        var validationParameters = new TokenValidationParameters
-        {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateLifetime = true,
-            ValidateIssuerSigningKey = true,
-            ValidIssuer = _options.Issuer,
-            ValidAudience = _options.Audience,
-            IssuerSigningKey = key,
-            ClockSkew = TimeSpan.Zero
-        };
-
-        try
-        {
-            var principal = _handler.ValidateToken(token, validationParameters, out _);
-            return principal;
-        }
-        catch
-        {
-            return null;
-        }
-    }
 }
 
 public sealed class JwtOptions
