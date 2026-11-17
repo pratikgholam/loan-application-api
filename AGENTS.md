@@ -206,3 +206,17 @@ These are unverified or unfinished. Confirm each before relying on it.
 4. Whether `Guid.CreateVersion7()` is available in .NET 10 and whether it should replace `Guid.NewGuid()`.
 5. ~~Remove the template `WeatherForecast` controller and model once real endpoints exist.~~ Removed: `WeatherForecastController.cs` and `WeatherForecast.cs` deleted; build and 42 tests pass.
 6. ~~Decide whether `Loan.Submit` and the transition methods should reject `DateTime` values whose kind is not `Utc`.~~ Decided yes, and implemented: `RequireUtc` in `Loan.Submit` and `ChangeStatus` throws `ArgumentException` when `Kind != Utc`, so callers fail fast in the domain instead of at the database.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues on `pratikgholam/loan-application-api`, managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles use their default label strings (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `GLOSSARY.md` + `docs/adr/`. See `docs/agents/domain.md`.
