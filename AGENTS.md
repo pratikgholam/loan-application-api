@@ -186,7 +186,7 @@ A UTC guard was added to `Loan.Submit` and `ChangeStatus`: `RequireUtc` throws `
   - `StatusHistory.LoanId` FK `Restrict` blocks `DELETE` from `Loans` when history exists — asserted on exact SQLSTATE `23001` (`restrict_violation`), not merely any FK error, so `NO ACTION` would not pass
   - `Loan.Status` stored as `varchar` text ("Submitted") not integer (1)
 
-Total after stage 9: 120 tests (111 unit/InMemory + 8 PostgreSQL + 1 RabbitMQ roundtrip).
+Total after stage 9: 122 tests (113 no-Docker + 8 PostgreSQL + 1 RabbitMQ roundtrip).
 
 **Docker is now required for the full test run.** `PostgresFixture.InitializeAsync` and `RabbitMqFixture.InitializeAsync` call `StartAsync()`, which throws when no Docker endpoint is reachable, and xUnit fails every test in the collection when a fixture throws — so a plain `dotnet test` without Docker fails rather than skipping. To run only the tests that need no Docker:
 
@@ -194,13 +194,15 @@ Total after stage 9: 120 tests (111 unit/InMemory + 8 PostgreSQL + 1 RabbitMQ ro
 dotnet test --filter "FullyQualifiedName!~IntegrationTests"
 ```
 
-Verified 2026-11-18: that filter passes 111/111 with no Docker. Note that overriding `DOCKER_HOST` does **not** simulate an absent Docker, because Testcontainers falls back to the default `unix:///var/run/docker.sock` context.
+Verified 2026-11-18: that filter passes 113/113 with no Docker. Note that overriding `DOCKER_HOST` does **not** simulate an absent Docker, because Testcontainers falls back to the default `unix:///var/run/docker.sock` context.
 
   - The UTC-guard cases (`Unspecified`/`Local` `DateTime` → `ArgumentException`) deliberately stay in `LoanTests.cs`, not here: they never reach the database, so they are unit tests and duplicating them in this collection only added Docker latency.
   - `PostgresFixture` reads `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` from environment (defaults `loanapp`/`loanapp`/`loanapp`). `compose.yml` requires `POSTGRES_PASSWORD` and the RabbitMQ credentials from `.env` with no fallback defaults.
 
 - Stage 8 (Dockerfile + full-stack compose): done. `Dockerfile` uses multi-stage build (`mcr.microsoft.com/dotnet/sdk:10.0` → `mcr.microsoft.com/dotnet/aspnet:10.0`), publishes API project. `compose.yml` defines `api` (port 8080) and `db` services with `depends_on: db:condition: service_healthy`. All secrets via gitignored `.env` (`POSTGRES_PASSWORD`, `JWT_KEY`, `ASPNETCORE_ENVIRONMENT`). `.dockerignore` excludes `tests/`, build output, IDE files, and secret configs. Verified: `docker compose up --build -d` starts both services, migrations apply, full API flow works (register → login → profile → submit → get), data persists via `pgdata` volume.
-- Stage 9 (RabbitMQ loan assignment): done. `LoanType` on `Loan`, nullable `AssignedOfficerUserId` FK, nullable `User.Expertise`, and migration `AddLoanTypeAndOfficerAssignment` (existing loans backfilled as `Personal`). Submissions publish `LoanSubmitted` with publisher confirms and up to four attempts after save; publish failure is logged and the submit still succeeds. `LoanApplication.Worker` consumes with prefetch 1, assigns idempotently, acks after save, and nacks/requeues on failure; no match is logged and acked. Officer list is filtered to assigned loans; admin sees all; detail includes `AssignedOfficerUserId`. Compose adds `rabbitmq:4-management` (healthcheck, `.env` credentials) plus the worker. Design: `docs/adr/0001-rabbitmq-loan-assignment.md`. Verified: full `dotnet test` passes 120/120 (111 no-Docker + 8 PostgreSQL + 1 RabbitMQ roundtrip), and `docker compose up --build -d` runs API + worker + DB + broker and completes submit → publish → assignment.
+- Stage 9 (RabbitMQ loan assignment): done. `LoanType` on `Loan`, nullable `AssignedOfficerUserId` FK, nullable `User.Expertise`, and migration `AddLoanTypeAndOfficerAssignment` (existing loans backfilled as `Personal`). Submissions publish `LoanSubmitted` with publisher confirms and up to four attempts after save; publish failure is logged and the submit still succeeds. `LoanApplication.Worker` consumes with prefetch 1, assigns idempotently, acks after save, and nacks/requeues on failure; no match is logged and acked. Officer list is filtered to assigned loans; admin sees all; detail includes `AssignedOfficerUserId`. Compose adds `rabbitmq:4-management` (healthcheck, `.env` credentials) plus the worker. Design: `docs/adr/0001-rabbitmq-loan-assignment.md`. Verified: full `dotnet test` passes 122/122 (113 no-Docker + 8 PostgreSQL + 1 RabbitMQ roundtrip), and `docker compose up --build -d` runs API + worker + DB + broker and completes submit → publish → assignment.
+
+Code review hardening (2026-10-29): migrations apply on API startup; duplicate registration returns 409 instead of 500; password length ceiling raised to 128 (minimum 8); `Loan.Status` is an EF Core concurrency token with conflicting writes surfacing as 409 in start-review/review/withdraw; dead code removed (`ValidateToken`, `CurrentUserService.GetRole`, commented-out `History` line, stale comment); `Register` returns `Created()` instead of a misleading `Location` header; JWT signing key length (>=32 bytes) validated at startup.
 
 Remaining stages: none.
 

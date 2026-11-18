@@ -79,6 +79,8 @@ Interactive documentation is available at `/scalar/v1` when the API is running.
 
 **Audit trail by design.** Status changes are never overwritten; each transition adds a row to `StatusHistory`.
 
+**Concurrency protection.** `Loan.Status` is an EF Core concurrency token, so two conflicting status updates cannot both commit; the API returns 409 and asks the caller to reload.
+
 **Integration tests on real PostgreSQL.** Database-backed tests run against PostgreSQL rather than an in-memory substitute, so behavior matches production.
 
 **Direct publish, then a worker assigns.** After the loan is saved, the API publishes a `LoanSubmitted` message with publisher confirms and a bounded retry. A separate worker consumes one message at a time, assigns the matching officer, and acknowledges only after the assignment is saved. There is no transactional outbox: if publishing exhausts its retries or the API crashes between save and publish, the loan stays saved and unassigned. This is recorded in `docs/adr/0001-rabbitmq-loan-assignment.md`.
@@ -139,6 +141,12 @@ loan-application-api/
 ├── src/
 │   ├── LoanApplication.Api/      # Web API
 │   └── LoanApplication.Worker/   # RabbitMQ consumer and assignment logic
-└── tests/
-    └── LoanApplication.Tests/    # Unit and integration tests
+├── tests/
+│   └── LoanApplication.Tests/    # Unit and integration tests
+├── docs/
+│   ├── adr/                      # Architecture decision records
+│   └── agents/                   # Agent-facing project docs
+└── CHANGELOG.md
 ```
+
+See `CHANGELOG.md` for release history.
