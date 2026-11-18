@@ -8,6 +8,7 @@ public interface ICurrentUserService
 {
     Guid GetUserId();
     bool IsOfficer();
+    bool IsAdmin();
 }
 
 public sealed class CurrentUserService : ICurrentUserService
@@ -33,5 +34,13 @@ public sealed class CurrentUserService : ICurrentUserService
             return false;
         return Enum.TryParse<UserRole>(roleClaim.Value, out var role) &&
                role is UserRole.LoanOfficer or UserRole.Admin;
+    }
+
+    public bool IsAdmin()
+    {
+        var roleClaim = _httpContextAccessor.HttpContext?.User.FindFirst(ClaimTypes.Role);
+        return roleClaim is not null &&
+               Enum.TryParse<UserRole>(roleClaim.Value, out var role) &&
+               role == UserRole.Admin;
     }
 }

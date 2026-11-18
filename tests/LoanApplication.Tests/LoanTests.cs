@@ -45,7 +45,7 @@ public class LoanTests
     // ---------- helpers ----------
 
     private static Loan NewLoan() =>
-        Loan.Submit(ApplicantId, ApplicantUserId, 10_000m, 24, "Car", T0);
+        Loan.Submit(ApplicantId, ApplicantUserId, 10_000m, 24, "Car", LoanType.Personal, T0);
 
     private static Loan InState(LoanStatus status)
     {
@@ -125,8 +125,53 @@ public class LoanTests
     [Fact]
     public void Submit_TrimsPurpose()
     {
-        var loan = Loan.Submit(ApplicantId, ApplicantUserId, 1m, 1, "  Car  ", T0);
+        var loan = Loan.Submit(ApplicantId, ApplicantUserId, 1m, 1, "  Car  ", LoanType.Personal, T0);
         Assert.Equal("Car", loan.Purpose);
+    }
+
+    [Fact]
+    public void Submit_StoresLoanType()
+    {
+        var loan = Loan.Submit(ApplicantId, ApplicantUserId, 1000m, 12, "Car", LoanType.Home, T0);
+        Assert.Equal(LoanType.Home, loan.LoanType);
+    }
+
+    [Fact]
+    public void Submit_WithUndefinedLoanType_Throws()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Loan.Submit(ApplicantId, ApplicantUserId, 1000m, 12, "Car", (LoanType)99, T0));
+    }
+
+    [Fact]
+    public void AssignOfficer_SetsAssignedOfficer()
+    {
+        var loan = NewLoan();
+
+        loan.AssignOfficer(OfficerId);
+
+        Assert.Equal(OfficerId, loan.AssignedOfficerUserId);
+    }
+
+    [Fact]
+    public void AssignOfficer_SameOfficerAgain_IsNoOp()
+    {
+        var loan = NewLoan();
+        loan.AssignOfficer(OfficerId);
+
+        loan.AssignOfficer(OfficerId);
+
+        Assert.Equal(OfficerId, loan.AssignedOfficerUserId);
+    }
+
+    [Fact]
+    public void AssignOfficer_DifferentOfficer_Throws()
+    {
+        var loan = NewLoan();
+        loan.AssignOfficer(OfficerId);
+
+        Assert.Throws<InvalidOperationException>(() => loan.AssignOfficer(Guid.NewGuid()));
+        Assert.Equal(OfficerId, loan.AssignedOfficerUserId);
     }
 
     [Theory]
@@ -135,7 +180,7 @@ public class LoanTests
     public void Submit_WithNonPositiveAmount_Throws(decimal amount)
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            Loan.Submit(ApplicantId, ApplicantUserId, amount, 12, "Car", T0));
+            Loan.Submit(ApplicantId, ApplicantUserId, amount, 12, "Car", LoanType.Personal, T0));
     }
 
     [Theory]
@@ -144,7 +189,7 @@ public class LoanTests
     public void Submit_WithNonPositiveTerm_Throws(int term)
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            Loan.Submit(ApplicantId, ApplicantUserId, 1000m, term, "Car", T0));
+            Loan.Submit(ApplicantId, ApplicantUserId, 1000m, term, "Car", LoanType.Personal, T0));
     }
 
     [Theory]
@@ -154,7 +199,7 @@ public class LoanTests
     public void Submit_WithBlankPurpose_Throws(string? purpose)
     {
         Assert.Throws<ArgumentException>(() =>
-            Loan.Submit(ApplicantId, ApplicantUserId, 1000m, 12, purpose!, T0));
+            Loan.Submit(ApplicantId, ApplicantUserId, 1000m, 12, purpose!, LoanType.Personal, T0));
     }
 
     // ---------- Transitions ----------
@@ -234,7 +279,7 @@ public class LoanTests
         var at = new DateTime(2026, 1, 1, 12, 0, 0, kind);
 
         Assert.Throws<ArgumentException>(() =>
-            Loan.Submit(ApplicantId, ApplicantUserId, 1000m, 12, "Car", at));
+            Loan.Submit(ApplicantId, ApplicantUserId, 1000m, 12, "Car", LoanType.Personal, at));
     }
 
     [Theory]

@@ -24,19 +24,22 @@ The owner writes the code. Agents act as pair-programming mentors: guide, review
 
 - .NET 10 SDK, ASP.NET Core (controllers)
 - PostgreSQL
+- RabbitMQ with the official .NET client (`RabbitMQ.Client`), publisher confirms, one queue, manual acknowledgement
 - EF Core 10 with the Npgsql provider, used with migrations for most CRUD
 - Dapper with hand-written SQL, used only for the reporting endpoint
 - JWT bearer authentication with role-based authorization
 - xUnit for unit and integration tests
 - Scalar (OpenAPI reference UI) for interactive API documentation
-- Dockerfile (multi-stage: SDK → ASP.NET runtime) and full-stack compose (API + PostgreSQL with healthcheck, `.env` for secrets; no GitHub Actions — out of scope, decided 2026-10-11)
+- A separate worker project (`Microsoft.NET.Sdk.Worker`) that assigns loans from queue messages
+- Dockerfile (multi-stage: SDK → ASP.NET runtime) and full-stack compose (API + worker + PostgreSQL + RabbitMQ with healthchecks, `.env` for secrets; no GitHub Actions — out of scope, decided 2026-10-11)
 
 ## Solution layout
 
 ```
 loan-application-api/
 ├── src/LoanApplication.Api/        Web API, controllers, EF Core
-└── tests/LoanApplication.Tests/    xUnit, references the API project
+├── src/LoanApplication.Worker/     RabbitMQ consumer and assignment handler
+└── tests/LoanApplication.Tests/    xUnit, references the API and Worker projects
 ```
 
 ## Commands
@@ -54,6 +57,12 @@ Run a focused subset of tests with a filter (verified working):
 dotnet test --filter "FullyQualifiedName~LoanTests"
 ```
 
+Run only the tests that need no Docker (excludes the PostgreSQL and RabbitMQ integration classes):
+
+```
+dotnet test --filter "FullyQualifiedName!~IntegrationTests"
+```
+
 EF Core migrations. The `dotnet-ef` tool (v10.0.12) is already installed:
 
 ```
@@ -69,18 +78,20 @@ dotnet ef database update --project src/LoanApplication.Api --startup-project sr
 
 ## Domain model
 
-- **User**: Id, Email, PasswordHash, Role
+- **User**: Id, Email, PasswordHash, Role, Expertise (nullable `LoanType`, meaningful for loan officers)
 - **Applicant**: Id, UserId, FullName, DateOfBirth (DateOnly), MonthlyIncome
-- **Loan**: Id, ApplicantId, Amount, TermMonths, Purpose, Status, CreatedAt, History
+- **Loan**: Id, ApplicantId, Amount, TermMonths, Purpose, LoanType, AssignedOfficerUserId (nullable), Status, CreatedAt, History
 - **StatusHistory**: Id, LoanId, FromStatus (nullable), ToStatus, ChangedByUserId, ChangedAt, Note
 - **UserRole**: Applicant, LoanOfficer, Admin
 - **LoanStatus**: Submitted=1, UnderReview=2, Approved=3, Rejected=4, Withdrawn=5
+- **LoanType**: Personal=1, Auto=2, Home=3, Business=4
 
 Relationships:
 - User 1:0..1 Applicant
 - Applicant 1:many Loan
 - Loan 1:many StatusHistory
 - StatusHistory.ChangedByUserId is a foreign key with no navigation property.
+- Loan.AssignedOfficerUserId is a nullable foreign key to `User` with no navigation property (`Restrict` delete behavior).
 
 The `Loan.History` property is named that way because `LoanApplication` clashes with the namespace. The clash is suspected, not confirmed.
 
@@ -100,6 +111,7 @@ Any other transition must be rejected.
 - Setters are private. Each entity has a private EF constructor.
 - Validation happens in the factory method.
 - Status changes happen only through `Submit`, `StartReview`, `Approve`, `Reject` and `Withdraw`. All of them go through one private `ChangeStatus`, which checks the transition and appends a `StatusHistory` row.
+- Assignment happens only through `AssignOfficer`, which is idempotent for the same officer and refuses to replace an existing officer.
 - `Loan.History` returns `_history.AsReadOnly()`.
 - Entities do not decide who may trigger a transition. That check belongs in controllers or services.
 
@@ -118,9 +130,9 @@ Roles: Applicant, LoanOfficer, Admin.
 | POST | /auth/register | Public |
 | POST | /auth/login | Public |
 | POST | /applications/profile | Applicant |
-| POST | /applications | Applicant |
-| GET | /applications/{id} | Applicant (own), LoanOfficer, Admin |
-| GET | /applications | LoanOfficer, Admin (filter by status, paged) |
+| POST | /applications | Applicant (includes `loanType`) |
+| GET | /applications/{id} | Applicant (own), LoanOfficer, Admin (includes assigned officer id) |
+| GET | /applications | LoanOfficer (own assignments only), Admin (all); filter by status, paged |
 | POST | /applications/{id}/start-review | LoanOfficer, Admin |
 | POST | /applications/{id}/review | LoanOfficer, Admin (approve or reject) |
 | POST | /applications/{id}/withdraw | Applicant (own) |
@@ -132,13 +144,18 @@ Roles: Applicant, LoanOfficer, Admin.
 
 - EF Core handles CRUD and migrations. Entity configuration (precision, unique email, enum storage) lives in configuration classes, not in attributes on entities.
 - Dapper is used only for `/reports/status-summary`, with hand-written SQL.
+- The API publishes `LoanSubmitted` after a successful save through `ILoanSubmittedPublisher` (`RabbitMqLoanSubmittedPublisher` when `RabbitMq:Host` is configured, a no-op otherwise). Publishing uses publisher confirms and four attempts; failures are logged and do not fail the request.
+- The worker reads and assigns through the same `AppDbContext`; it never changes status.
 - Migrations are generated with `dotnet ef`. Do not edit an applied migration. Add a new one.
 
 ## Testing
 
 - Unit tests live in `tests/LoanApplication.Tests/LoanTests.cs` and are pure in-memory: they need no database or other services.
-- Unit tests cover entities and transition rules. Every status and action combination is tested, plus the UTC guard on `Submit` and every transition (42 tests, all passing).
-- PostgreSQL-backed integration tests live in `tests/LoanApplication.Tests/PostgresIntegrationTests.cs` and run against a real `postgres:18-alpine` container via Testcontainers. They **require Docker**. Filter them out with `--filter "FullyQualifiedName!~PostgresIntegrationTests"` to run the no-Docker subset.
+- Unit tests cover entities and transition rules. Every status and action combination is tested, plus the UTC guard on `Submit`, every transition, loan type validation, and idempotent assignment.
+- Worker match logic is unit tested in `LoanAssignmentHandlerTests.cs` with EF InMemory: match, no match, already assigned, and missing loan. No broker or real database is used.
+- PostgreSQL-backed integration tests live in `tests/LoanApplication.Tests/PostgresIntegrationTests.cs` and run against a real `postgres:18-alpine` container via Testcontainers. They **require Docker**.
+- The broker roundtrip test lives in `RabbitMqIntegrationTests.cs` (collection `BrokerCollection`, with real PostgreSQL and `rabbitmq:4-management` containers): submit through the API, publish, worker assignment, ack (asserted by the queue being empty after the consumer stops).
+- Filter both integration classes out with `--filter "FullyQualifiedName!~IntegrationTests"` to run the no-Docker subset.
 - Test names describe behavior.
 
 ## Git and repository hygiene
@@ -169,30 +186,33 @@ A UTC guard was added to `Loan.Submit` and `ChangeStatus`: `RequireUtc` throws `
   - `StatusHistory.LoanId` FK `Restrict` blocks `DELETE` from `Loans` when history exists — asserted on exact SQLSTATE `23001` (`restrict_violation`), not merely any FK error, so `NO ACTION` would not pass
   - `Loan.Status` stored as `varchar` text ("Submitted") not integer (1)
 
-Total: 107 tests passing (99 unit/InMemory + 8 PostgreSQL).
+Total after stage 9: 122 tests (113 no-Docker + 8 PostgreSQL + 1 RabbitMQ roundtrip).
 
-**Docker is now required for the full test run.** This contradicts the earlier "testing" section that says `dotnet test` needs no database or other services; that statement now holds only for the non-PostgreSQL subset. `PostgresFixture.InitializeAsync` calls `StartAsync()`, which throws when no Docker endpoint is reachable, and xUnit fails every test in the collection when a fixture throws — so a plain `dotnet test` without Docker fails rather than skipping. To run only the tests that need no Docker:
+**Docker is now required for the full test run.** `PostgresFixture.InitializeAsync` and `RabbitMqFixture.InitializeAsync` call `StartAsync()`, which throws when no Docker endpoint is reachable, and xUnit fails every test in the collection when a fixture throws — so a plain `dotnet test` without Docker fails rather than skipping. To run only the tests that need no Docker:
 
 ```
-dotnet test --filter "FullyQualifiedName!~PostgresIntegrationTests"
+dotnet test --filter "FullyQualifiedName!~IntegrationTests"
 ```
 
-Verified 2026-10-11: that filter passes 108/108 with no Docker. Note that overriding `DOCKER_HOST` does **not** simulate an absent Docker, because Testcontainers falls back to the default `unix:///var/run/docker.sock` context.
+Verified 2026-11-18: that filter passes 113/113 with no Docker. Note that overriding `DOCKER_HOST` does **not** simulate an absent Docker, because Testcontainers falls back to the default `unix:///var/run/docker.sock` context.
 
   - The UTC-guard cases (`Unspecified`/`Local` `DateTime` → `ArgumentException`) deliberately stay in `LoanTests.cs`, not here: they never reach the database, so they are unit tests and duplicating them in this collection only added Docker latency.
-  - `PostgresFixture` reads `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` from environment (defaults `loanapp`/`loanapp`/`loanapp`), matching the `compose.yml` convention (`${POSTGRES_PASSWORD:-...}`). No credentials literals remain in source.
+  - `PostgresFixture` reads `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` from environment (defaults `loanapp`/`loanapp`/`loanapp`). `compose.yml` requires `POSTGRES_PASSWORD` and the RabbitMQ credentials from `.env` with no fallback defaults.
 
-- Stage 8 (Dockerfile + full-stack compose): done. `Dockerfile` uses multi-stage build (`mcr.microsoft.com/dotnet/sdk:10.0` → `mcr.microsoft.com/dotnet/aspnet:10.0`), publishes API project only. `compose.yml` defines `api` (port 8080) and `db` services with `depends_on: db:condition: service_healthy`. All secrets via gitignored `.env` (`POSTGRES_PASSWORD`, `JWT_KEY`, `ASPNETCORE_ENVIRONMENT`). `.dockerignore` excludes `tests/`, build output, IDE files, and secret configs. Verified: `docker compose up --build -d` starts both services, migrations apply, full API flow works (register → login → profile → submit → get), data persists via `pgdata` volume. 108 unit/InMemory tests pass.
+- Stage 8 (Dockerfile + full-stack compose): done. `Dockerfile` uses multi-stage build (`mcr.microsoft.com/dotnet/sdk:10.0` → `mcr.microsoft.com/dotnet/aspnet:10.0`), publishes API project. `compose.yml` defines `api` (port 8080) and `db` services with `depends_on: db:condition: service_healthy`. All secrets via gitignored `.env` (`POSTGRES_PASSWORD`, `JWT_KEY`, `ASPNETCORE_ENVIRONMENT`). `.dockerignore` excludes `tests/`, build output, IDE files, and secret configs. Verified: `docker compose up --build -d` starts both services, migrations apply, full API flow works (register → login → profile → submit → get), data persists via `pgdata` volume.
+- Stage 9 (RabbitMQ loan assignment): done. `LoanType` on `Loan`, nullable `AssignedOfficerUserId` FK, nullable `User.Expertise`, and migration `AddLoanTypeAndOfficerAssignment` (existing loans backfilled as `Personal`). Submissions publish `LoanSubmitted` with publisher confirms and up to four attempts after save; publish failure is logged and the submit still succeeds. `LoanApplication.Worker` consumes with prefetch 1, assigns idempotently, acks after save, and nacks/requeues on failure; no match is logged and acked. Officer list is filtered to assigned loans; admin sees all; detail includes `AssignedOfficerUserId`. Compose adds `rabbitmq:4-management` (healthcheck, `.env` credentials) plus the worker. Design: `docs/adr/0001-rabbitmq-loan-assignment.md`. Verified: full `dotnet test` passes 122/122 (113 no-Docker + 8 PostgreSQL + 1 RabbitMQ roundtrip), and `docker compose up --build -d` runs API + worker + DB + broker and completes submit → publish → assignment.
+
+Code review hardening (2026-10-29): migrations apply on API startup; duplicate registration returns 409 instead of 500; password length ceiling raised to 128 (minimum 8); `Loan.Status` is an EF Core concurrency token with conflicting writes surfacing as 409 in start-review/review/withdraw; dead code removed (`ValidateToken`, `CurrentUserService.GetRole`, commented-out `History` line, stale comment); `Register` returns `Created()` instead of a misleading `Location` header; JWT signing key length (>=32 bytes) validated at startup.
 
 Remaining stages: none.
 
 ## README vs reality
 
-The README now matches the repo (verified 2026-10-12):
+The README now matches the repo (verified 2026-11-18):
 
-- `docker compose up --build -d` runs the full stack (API + DB). `Dockerfile` exists.
+- `docker compose up --build -d` runs the full stack (API + worker + DB + RabbitMQ). `Dockerfile` and `src/LoanApplication.Worker/Dockerfile` exist.
 - GitHub Actions entry removed (out of scope).
-- Endpoint table includes `start-review`; data model uses `Loan` (not `LoanApplication`).
+- Endpoint table includes `start-review`; data model uses `Loan` (not `LoanApplication`); submission requires `loanType` and officers see only their assignments.
 
 Trust the repo over the README. Fix the README when the code catches up (see working agreement).
 
@@ -206,3 +226,22 @@ These are unverified or unfinished. Confirm each before relying on it.
 4. Whether `Guid.CreateVersion7()` is available in .NET 10 and whether it should replace `Guid.NewGuid()`.
 5. ~~Remove the template `WeatherForecast` controller and model once real endpoints exist.~~ Removed: `WeatherForecastController.cs` and `WeatherForecast.cs` deleted; build and 42 tests pass.
 6. ~~Decide whether `Loan.Submit` and the transition methods should reject `DateTime` values whose kind is not `Utc`.~~ Decided yes, and implemented: `RequireUtc` in `Loan.Submit` and `ChangeStatus` throws `ArgumentException` when `Kind != Utc`, so callers fail fast in the domain instead of at the database.
+7. No transactional outbox or periodic sweep. A loan stays unassigned if publishing exhausts four attempts or the API dies between save and publish. Accepted in ADR 0001; the upgrade path is a sweep that republishes unassigned loans or an outbox.
+8. Publish retry (four attempts) is implemented but has no isolated test with a fake broker; it is covered only indirectly by the live roundtrip. The retry loop is plain and small.
+9. Officer expertise has no management endpoint — it is set directly in the database (out of scope in issue #8). Tests seed it.
+10. Assignment is single-worker by design. A second worker instance could double-assign; no locking exists.
+11. `start-review` and `review` are still open to any LoanOfficer (not just the assigned one); the list is filtered, but a known loan id can be acted on by another officer. Issue #8 did not require restricting this.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues on `pratikgholam/loan-application-api`, managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles use their default label strings (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `GLOSSARY.md` + `docs/adr/`. See `docs/agents/domain.md`.

@@ -4,7 +4,7 @@ public class User
 {
     private User() { } // required by EF Core
  
-    public User(string email, string passwordHash, UserRole role)
+    public User(string email, string passwordHash, UserRole role, LoanType? expertise = null)
     {
         if (string.IsNullOrWhiteSpace(email))
             throw new ArgumentException("Email is required.", nameof(email));
@@ -15,11 +15,13 @@ public class User
         Email = email.Trim().ToLowerInvariant();
         PasswordHash = passwordHash;
         Role = role;
+        Expertise = expertise;
     }
  
     public Guid Id { get; private set; }
     public string Email { get; private set; } = null!;
     public string PasswordHash { get; private set; } = null!;
     public UserRole Role { get; private set; }
+    public LoanType? Expertise { get; private set; }
 
 }
