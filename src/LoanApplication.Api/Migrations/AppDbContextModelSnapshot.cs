@@ -62,8 +62,18 @@ namespace LoanApplication.Api.Migrations
                     b.Property<Guid>("ApplicantId")
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("AssignedOfficerUserId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LoanType")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasDefaultValue("Personal");
 
                     b.Property<string>("Purpose")
                         .IsRequired()
@@ -82,6 +92,8 @@ namespace LoanApplication.Api.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("ApplicantId");
+
+                    b.HasIndex("AssignedOfficerUserId");
 
                     b.HasIndex("Status");
 
@@ -134,6 +146,10 @@ namespace LoanApplication.Api.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
 
+                    b.Property<string>("Expertise")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
                     b.Property<string>("PasswordHash")
                         .IsRequired()
                         .HasMaxLength(256)
@@ -170,6 +186,11 @@ namespace LoanApplication.Api.Migrations
                         .HasForeignKey("ApplicantId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("LoanApplication.Api.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("AssignedOfficerUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("Applicant");
                 });

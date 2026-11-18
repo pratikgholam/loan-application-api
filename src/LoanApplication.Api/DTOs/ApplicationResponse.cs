@@ -1,3 +1,5 @@
+using LoanApplication.Api.Entities;
+
 namespace LoanApplication.Api.DTOs;
 
 public sealed record ApplicationResponse(
@@ -6,7 +8,9 @@ public sealed record ApplicationResponse(
     decimal Amount,
     int TermMonths,
     string Purpose,
-    LoanApplication.Api.Entities.LoanStatus Status,
+    LoanType LoanType,
+    LoanStatus Status,
+    Guid? AssignedOfficerUserId,
     DateTime CreatedAt,
     IReadOnlyCollection<StatusHistoryDto> History
 );
