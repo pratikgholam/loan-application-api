@@ -30,6 +30,18 @@ builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddScoped<IApplicationService, ApplicationService>();
 builder.Services.AddScoped<IReportService, ReportService>();
 
+// With a broker configured the API publishes loan submissions; without one it runs
+// (and tests run) with a no-op publisher, leaving loans saved and unassigned.
+if (!string.IsNullOrWhiteSpace(builder.Configuration["RabbitMq:Host"]))
+{
+    builder.Services.Configure<RabbitMqOptions>(builder.Configuration.GetSection("RabbitMq"));
+    builder.Services.AddSingleton<ILoanSubmittedPublisher, RabbitMqLoanSubmittedPublisher>();
+}
+else
+{
+    builder.Services.AddSingleton<ILoanSubmittedPublisher, NullLoanSubmittedPublisher>();
+}
+
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {

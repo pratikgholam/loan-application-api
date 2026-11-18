@@ -76,7 +76,7 @@ public sealed class PostgresIntegrationTests : IAsyncLifetime
         var (applicantId, userId) = await CreateTestApplicantWithUserAsync();
 
         var now = DateTime.UtcNow;
-        var loan = Loan.Submit(applicantId, userId, 10000m, 12, "Test loan", now);
+        var loan = Loan.Submit(applicantId, userId, 10000m, 12, "Test loan", LoanType.Personal, now);
         _db.Loans.Add(loan);
         await _db.SaveChangesAsync();
 
@@ -99,7 +99,7 @@ public sealed class PostgresIntegrationTests : IAsyncLifetime
         var officerUserId = await CreateTestUserAsync("officer@example.com", UserRole.LoanOfficer);
 
         var now = DateTime.UtcNow;
-        var loan = Loan.Submit(applicantId, applicantUserId, 10000m, 12, "Test loan", now);
+        var loan = Loan.Submit(applicantId, applicantUserId, 10000m, 12, "Test loan", LoanType.Personal, now);
         _db.Loans.Add(loan);
         await _db.SaveChangesAsync();
 
@@ -162,9 +162,9 @@ public sealed class PostgresIntegrationTests : IAsyncLifetime
         var officerUserId = await CreateTestUserAsync("officer@example.com", UserRole.LoanOfficer);
 
         var now = DateTime.UtcNow;
-        var loan1 = Loan.Submit(applicantId1, applicantUserId1, 10000m, 12, "Loan 1", now);
-        var loan2 = Loan.Submit(applicantId2, applicantUserId2, 25000m, 24, "Loan 2", now);
-        var loan3 = Loan.Submit(applicantId1, applicantUserId1, 5000m, 6, "Loan 3", now);
+        var loan1 = Loan.Submit(applicantId1, applicantUserId1, 10000m, 12, "Loan 1", LoanType.Personal, now);
+        var loan2 = Loan.Submit(applicantId2, applicantUserId2, 25000m, 24, "Loan 2", LoanType.Personal, now);
+        var loan3 = Loan.Submit(applicantId1, applicantUserId1, 5000m, 6, "Loan 3", LoanType.Personal, now);
 
         // Transition loan1 to Approved, loan2 to Rejected
         loan1.StartReview(officerUserId, now.AddMinutes(10));
@@ -241,7 +241,7 @@ public sealed class PostgresIntegrationTests : IAsyncLifetime
         var (applicantId, userId) = await CreateTestApplicantWithUserAsync();
 
         var now = DateTime.UtcNow;
-        var loan = Loan.Submit(applicantId, userId, 10000m, 12, "Test loan", now);
+        var loan = Loan.Submit(applicantId, userId, 10000m, 12, "Test loan", LoanType.Personal, now);
         _db.Loans.Add(loan);
         await _db.SaveChangesAsync();
 

@@ -90,7 +90,10 @@ public sealed class ApplicationsController : ControllerBase
         [FromQuery] GetApplicationsQuery query,
         CancellationToken ct)
     {
-        var result = await _applicationService.GetPagedAsync(query, ct);
+        var result = await _applicationService.GetPagedAsync(
+            query,
+            assignedToOfficerId: _currentUser.IsAdmin() ? null : _currentUser.GetUserId(),
+            ct);
         return Ok(result);
     }
 
@@ -102,7 +105,7 @@ public sealed class ApplicationsController : ControllerBase
         var officerId = _currentUser.GetUserId();
         try
         {
-            var loan = await _applicationService.StartReviewAsync(officerId, id, DateTime.UtcNow, ct);
+            var loan = await _applicationService.StartReviewAsync(officerId, id, _currentUser.IsAdmin(), DateTime.UtcNow, ct);
             return Ok(loan);
         }
         catch (KeyNotFoundException)
@@ -126,7 +129,7 @@ public sealed class ApplicationsController : ControllerBase
         var officerId = _currentUser.GetUserId();
         try
         {
-            var loan = await _applicationService.ReviewAsync(officerId, id, request, DateTime.UtcNow, ct);
+            var loan = await _applicationService.ReviewAsync(officerId, id, request, _currentUser.IsAdmin(), DateTime.UtcNow, ct);
             return Ok(loan);
         }
         catch (KeyNotFoundException)

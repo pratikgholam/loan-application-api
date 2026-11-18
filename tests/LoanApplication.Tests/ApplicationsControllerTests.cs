@@ -10,6 +10,7 @@ using LoanApplication.Api.Entities;
 using LoanApplication.Api.Services;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
@@ -85,8 +86,32 @@ public class ApplicationsControllerTests : IDisposable
         return client;
     }
 
+    private Guid GetUserId(string email)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        return db.Users.Single(u => u.Email == email).Id;
+    }
+
+    // The worker normally assigns officers; this test seeds the same state directly.
+    private void AssignToOfficer(Guid loanId, Guid officerUserId)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var loan = db.Loans.Single(l => l.Id == loanId);
+        loan.AssignOfficer(officerUserId);
+        db.SaveChanges();
+    }
+
     private sealed class TestFactory : WebApplicationFactory<Program>
     {
+        private readonly bool _publishFails;
+
+        public TestFactory(bool publishFails = false)
+        {
+            _publishFails = publishFails;
+        }
+
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             var dbName = $"ApplicationsTests_{Guid.NewGuid()}";
@@ -122,7 +147,19 @@ public class ApplicationsControllerTests : IDisposable
 
                 // Seed role users synchronously at startup.
                 SeedUsersStatic(services);
+
+                if (_publishFails)
+                {
+                    services.RemoveAll<ILoanSubmittedPublisher>();
+                    services.AddSingleton<ILoanSubmittedPublisher, FailingPublisher>();
+                }
             });
+        }
+
+        private sealed class FailingPublisher : ILoanSubmittedPublisher
+        {
+            public Task PublishAsync(LoanApplication.Api.Messaging.LoanSubmitted message, CancellationToken ct)
+                => throw new InvalidOperationException("Broker unavailable.");
         }
 
         public static void SeedUsersStatic(IServiceCollection services)
@@ -133,7 +170,7 @@ public class ApplicationsControllerTests : IDisposable
             var hasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
 
             db.Users.AddRange(
-                new User(OfficerEmail, hasher.HashPassword(OfficerPassword), UserRole.LoanOfficer),
+                new User(OfficerEmail, hasher.HashPassword(OfficerPassword), UserRole.LoanOfficer, LoanType.Auto),
                 new User(AdminEmail, hasher.HashPassword(AdminPassword), UserRole.Admin));
             db.SaveChanges();
         }
@@ -203,7 +240,7 @@ public class ApplicationsControllerTests : IDisposable
         var request = new CreateApplicationRequest(
             25000m,
             24,
-            "Home improvement loan");
+            "Home improvement loan", LoanType.Personal);
 
         // Act.
         var response = await localClient.PostAsJsonAsync("/applications", request);
@@ -219,6 +256,8 @@ public class ApplicationsControllerTests : IDisposable
         Assert.Equal(25000m, body.Amount);
         Assert.Equal(24, body.TermMonths);
         Assert.Equal("Home improvement loan", body.Purpose);
+        Assert.Equal(LoanType.Personal, body.LoanType);
+        Assert.Null(body.AssignedOfficerUserId);
         Assert.Single(body.History);
         Assert.Equal(LoanStatus.Submitted, body.History.First().ToStatus);
     }
@@ -232,7 +271,7 @@ public class ApplicationsControllerTests : IDisposable
         var request = new CreateApplicationRequest(
             25000m,
             24,
-            "Home improvement loan");
+            "Home improvement loan", LoanType.Personal);
 
         // Act.
         var response = await localClient.PostAsJsonAsync("/applications", request);
@@ -252,7 +291,7 @@ public class ApplicationsControllerTests : IDisposable
         await localClient.PostAsJsonAsync("/applications/profile", profile);
 
         var response = await localClient.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(0m, 24, "Home improvement loan"));
+            new CreateApplicationRequest(0m, 24, "Home improvement loan", LoanType.Personal));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -268,9 +307,53 @@ public class ApplicationsControllerTests : IDisposable
         await localClient.PostAsJsonAsync("/applications/profile", profile);
 
         var response = await localClient.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(25000m, 0, "Home improvement loan"));
+            new CreateApplicationRequest(25000m, 0, "Home improvement loan", LoanType.Personal));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Create_WithoutLoanType_Returns400()
+    {
+        var (localClient, _) = await RegisterAndLoginAsync("notype@example.com", "Password123");
+        var profile = new CreateApplicantProfileRequest(
+            "Ada Lovelace",
+            new DateOnly(1815, 12, 10),
+            5000m);
+        await localClient.PostAsJsonAsync("/applications/profile", profile);
+
+        var response = await localClient.PostAsJsonAsync("/applications",
+            new { Amount = 25000m, TermMonths = 24, Purpose = "No type" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Create_WhenPublishFails_StillSavesAndReturns201()
+    {
+        using var factory = new TestFactory(publishFails: true);
+        using var client = factory.CreateClient();
+        const string email = "publishfail@example.com";
+
+        await client.PostAsJsonAsync("/auth/register", new { Email = email, Password = "Password123" });
+        var auth = await (await client.PostAsJsonAsync("/auth/login", new { Email = email, Password = "Password123" }))
+            .Content.ReadFromJsonAsync<AuthResponse>();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", auth!.AccessToken);
+
+        await client.PostAsJsonAsync("/applications/profile",
+            new CreateApplicantProfileRequest("Ada Lovelace", new DateOnly(1815, 12, 10), 5000m));
+
+        var response = await client.PostAsJsonAsync("/applications",
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Auto));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var body = (await response.Content.ReadFromJsonAsync<ApplicationResponse>())!;
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var saved = await db.Loans.FindAsync(body.Id);
+        Assert.NotNull(saved);
+        Assert.Null(saved!.AssignedOfficerUserId);
     }
 
     #endregion
@@ -287,7 +370,7 @@ public class ApplicationsControllerTests : IDisposable
             5000m);
         await applicant.PostAsJsonAsync("/applications/profile", profile);
         var loan = await applicant.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(10000m, 12, "Car"));
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Personal));
         var loanId = (await loan.Content.ReadFromJsonAsync<ApplicationResponse>())!.Id;
 
         var response = await applicant.GetAsync($"/applications/{loanId}");
@@ -305,7 +388,7 @@ public class ApplicationsControllerTests : IDisposable
             5000m);
         await owner.PostAsJsonAsync("/applications/profile", profile);
         var loan = await owner.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(10000m, 12, "Car"));
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Personal));
         var loanId = (await loan.Content.ReadFromJsonAsync<ApplicationResponse>())!.Id;
 
         var (other, _) = await RegisterAndLoginAsync("other2@example.com", "Password123");
@@ -324,7 +407,7 @@ public class ApplicationsControllerTests : IDisposable
             5000m);
         await owner.PostAsJsonAsync("/applications/profile", profile);
         var loan = await owner.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(10000m, 12, "Car"));
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Personal));
         var loanId = (await loan.Content.ReadFromJsonAsync<ApplicationResponse>())!.Id;
 
         var officerClient = await GetOfficerClientAsync();
@@ -344,14 +427,46 @@ public class ApplicationsControllerTests : IDisposable
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
-    #endregion
+    [Fact]
+    public async Task StartReview_AssignedToAnotherOfficer_Returns404()
+    {
+        var (applicant, _) = await RegisterAndLoginAsync("sr-other@example.com", "Password123");
+        var profile = new CreateApplicantProfileRequest("Ada Lovelace", new DateOnly(1815, 12, 10), 5000m);
+        await applicant.PostAsJsonAsync("/applications/profile", profile);
+        var loan = await applicant.PostAsJsonAsync("/applications",
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Personal));
+        var loanId = (await loan.Content.ReadFromJsonAsync<ApplicationResponse>())!.Id;
 
-    #region List applications
+        AssignToOfficer(loanId, Guid.NewGuid());
+
+        var officerClient = await GetOfficerClientAsync();
+        var response = await officerClient.PostAsync($"/applications/{loanId}/start-review", null);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
 
     [Fact]
-    public async Task GetAll_Officer_ReturnsPagedResponse()
+    public async Task Review_AssignedToAnotherOfficer_Returns404()
     {
+        var (applicant, _) = await RegisterAndLoginAsync("rv-other@example.com", "Password123");
+        var profile = new CreateApplicantProfileRequest("Ada Lovelace", new DateOnly(1815, 12, 10), 5000m);
+        await applicant.PostAsJsonAsync("/applications/profile", profile);
+        var loan = await applicant.PostAsJsonAsync("/applications",
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Personal));
+        var loanId = (await loan.Content.ReadFromJsonAsync<ApplicationResponse>())!.Id;
+
+        AssignToOfficer(loanId, Guid.NewGuid());
+
         var officerClient = await GetOfficerClientAsync();
+        var response = await officerClient.PostAsJsonAsync($"/applications/{loanId}/review",
+            new ReviewApplicationRequest(true, null));
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+
+    [Fact]
+    public async Task GetAll_Admin_ReturnsPagedResponse()
+    {
+        var adminClient = await GetAdminClientAsync();
 
         // Create several loans as different applicants.
         var applicants = new List<(string, string)>
@@ -370,10 +485,10 @@ public class ApplicationsControllerTests : IDisposable
                 5000m);
             await localClient.PostAsJsonAsync("/applications/profile", profile);
             await localClient.PostAsJsonAsync("/applications",
-                new CreateApplicationRequest(10000m, 12, "Loan"));
+                new CreateApplicationRequest(10000m, 12, "Loan", LoanType.Personal));
         }
 
-        var response = await officerClient.GetAsync("/applications?page=1&pageSize=2");
+        var response = await adminClient.GetAsync("/applications?page=1&pageSize=2");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         var body = await response.Content.ReadFromJsonAsync<PagedApplicationsResponse>();
@@ -386,9 +501,9 @@ public class ApplicationsControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task GetAll_Officer_FilterByStatus_ReturnsOnlyMatching()
+    public async Task GetAll_Admin_FilterByStatus_ReturnsOnlyMatching()
     {
-        var officerClient = await GetOfficerClientAsync();
+        var adminClient = await GetAdminClientAsync();
 
         var (applicant, _) = await RegisterAndLoginAsync("filter@example.com", "Password123");
         var profile = new CreateApplicantProfileRequest(
@@ -397,12 +512,49 @@ public class ApplicationsControllerTests : IDisposable
             5000m);
         await applicant.PostAsJsonAsync("/applications/profile", profile);
         await applicant.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(10000m, 12, "Loan"));
+            new CreateApplicationRequest(10000m, 12, "Loan", LoanType.Personal));
 
         // The filter endpoint accepts the status enum name; the important check is the
         // route exists and the query parameter is wired up, which this verifies.
-        var response = await officerClient.GetAsync("/applications?status=Submitted");
+        var response = await adminClient.GetAsync("/applications?status=Submitted");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Assignment_IsVisibleOnDetailAndFiltersOfficerList()
+    {
+        var (applicant, _) = await RegisterAndLoginAsync("assigned@example.com", "Password123");
+        var profile = new CreateApplicantProfileRequest(
+            "Ada Lovelace",
+            new DateOnly(1815, 12, 10),
+            5000m);
+        await applicant.PostAsJsonAsync("/applications/profile", profile);
+
+        var assigned = await applicant.PostAsJsonAsync("/applications",
+            new CreateApplicationRequest(10000m, 12, "Assigned", LoanType.Auto));
+        var assignedLoan = (await assigned.Content.ReadFromJsonAsync<ApplicationResponse>())!;
+        var unassigned = await applicant.PostAsJsonAsync("/applications",
+            new CreateApplicationRequest(10000m, 12, "Unassigned", LoanType.Home));
+        var unassignedLoan = (await unassigned.Content.ReadFromJsonAsync<ApplicationResponse>())!;
+
+        var officerId = GetUserId(OfficerEmail);
+        AssignToOfficer(assignedLoan.Id, officerId);
+
+        // The officer's list contains only their assignment.
+        var officerClient = await GetOfficerClientAsync();
+        var list = await officerClient.GetAsync("/applications");
+        var page = (await list.Content.ReadFromJsonAsync<PagedApplicationsResponse>())!;
+        Assert.Equal(1, page.TotalCount);
+        Assert.Equal(assignedLoan.Id, page.Items.Single().Id);
+
+        // The applicant can see who handles theirs; an unassigned loan shows null.
+        var detail = await applicant.GetAsync($"/applications/{assignedLoan.Id}");
+        var detailBody = (await detail.Content.ReadFromJsonAsync<ApplicationResponse>())!;
+        Assert.Equal(officerId, detailBody.AssignedOfficerUserId);
+
+        var unassignedDetail = await applicant.GetAsync($"/applications/{unassignedLoan.Id}");
+        var unassignedBody = (await unassignedDetail.Content.ReadFromJsonAsync<ApplicationResponse>())!;
+        Assert.Null(unassignedBody.AssignedOfficerUserId);
     }
 
     #endregion
@@ -419,7 +571,7 @@ public class ApplicationsControllerTests : IDisposable
             5000m);
         await applicant.PostAsJsonAsync("/applications/profile", profile);
         var loan = await applicant.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(10000m, 12, "Car"));
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Personal));
         var loanId = (await loan.Content.ReadFromJsonAsync<ApplicationResponse>())!.Id;
 
         var officerClient = await GetOfficerClientAsync();
@@ -442,7 +594,7 @@ public class ApplicationsControllerTests : IDisposable
             5000m);
         await applicant.PostAsJsonAsync("/applications/profile", profile);
         var loan = await applicant.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(10000m, 12, "Car"));
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Personal));
         var loanId = (await loan.Content.ReadFromJsonAsync<ApplicationResponse>())!.Id;
 
         var officerClient = await GetOfficerClientAsync();
@@ -462,7 +614,7 @@ public class ApplicationsControllerTests : IDisposable
             5000m);
         await applicant.PostAsJsonAsync("/applications/profile", profile);
         var loan = await applicant.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(10000m, 12, "Car"));
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Personal));
         var loanId = (await loan.Content.ReadFromJsonAsync<ApplicationResponse>())!.Id;
 
         var officerClient = await GetOfficerClientAsync();
@@ -487,7 +639,7 @@ public class ApplicationsControllerTests : IDisposable
             5000m);
         await applicant.PostAsJsonAsync("/applications/profile", profile);
         var loan = await applicant.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(10000m, 12, "Car"));
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Personal));
         var loanId = (await loan.Content.ReadFromJsonAsync<ApplicationResponse>())!.Id;
 
         var officerClient = await GetOfficerClientAsync();
@@ -512,7 +664,7 @@ public class ApplicationsControllerTests : IDisposable
             5000m);
         await applicant.PostAsJsonAsync("/applications/profile", profile);
         var loan = await applicant.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(10000m, 12, "Car"));
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Personal));
         var loanId = (await loan.Content.ReadFromJsonAsync<ApplicationResponse>())!.Id;
 
         var officerClient = await GetOfficerClientAsync();
@@ -534,7 +686,7 @@ public class ApplicationsControllerTests : IDisposable
             5000m);
         await applicant.PostAsJsonAsync("/applications/profile", profile);
         var loan = await applicant.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(10000m, 12, "Car"));
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Personal));
         var loanId = (await loan.Content.ReadFromJsonAsync<ApplicationResponse>())!.Id;
 
         var officerClient = await GetOfficerClientAsync();
@@ -556,7 +708,7 @@ public class ApplicationsControllerTests : IDisposable
             5000m);
         await applicant.PostAsJsonAsync("/applications/profile", profile);
         var loan = await applicant.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(10000m, 12, "Car"));
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Personal));
         var loanId = (await loan.Content.ReadFromJsonAsync<ApplicationResponse>())!.Id;
 
         var officerClient = await GetOfficerClientAsync();
@@ -580,7 +732,7 @@ public class ApplicationsControllerTests : IDisposable
             5000m);
         await applicant.PostAsJsonAsync("/applications/profile", profile);
         var loan = await applicant.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(10000m, 12, "Car"));
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Personal));
         var loanId = (await loan.Content.ReadFromJsonAsync<ApplicationResponse>())!.Id;
 
         var officerClient = await GetOfficerClientAsync();
@@ -606,7 +758,7 @@ public class ApplicationsControllerTests : IDisposable
             5000m);
         await applicant.PostAsJsonAsync("/applications/profile", profile);
         var loan = await applicant.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(10000m, 12, "Car"));
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Personal));
         var loanId = (await loan.Content.ReadFromJsonAsync<ApplicationResponse>())!.Id;
 
         var response = await applicant.PostAsync($"/applications/{loanId}/withdraw", null);
@@ -627,7 +779,7 @@ public class ApplicationsControllerTests : IDisposable
             5000m);
         await owner.PostAsJsonAsync("/applications/profile", profile);
         var loan = await owner.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(10000m, 12, "Car"));
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Personal));
         var loanId = (await loan.Content.ReadFromJsonAsync<ApplicationResponse>())!.Id;
 
         var (other, _) = await RegisterAndLoginAsync("withdrawother@example.com", "Password123");
@@ -647,7 +799,7 @@ public class ApplicationsControllerTests : IDisposable
             5000m);
         await applicant.PostAsJsonAsync("/applications/profile", profile);
         var loan = await applicant.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(10000m, 12, "Car"));
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Personal));
         var loanId = (await loan.Content.ReadFromJsonAsync<ApplicationResponse>())!.Id;
 
         await applicant.PostAsync($"/applications/{loanId}/withdraw", null);
@@ -687,7 +839,7 @@ public class ApplicationsControllerTests : IDisposable
     {
         var officerClient = await GetOfficerClientAsync();
         var response = await officerClient.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(10000m, 12, "Car"));
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Personal));
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
@@ -701,7 +853,7 @@ public class ApplicationsControllerTests : IDisposable
             5000m);
         await applicant.PostAsJsonAsync("/applications/profile", profile);
         var loan = await applicant.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(10000m, 12, "Car"));
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Personal));
         var loanId = (await loan.Content.ReadFromJsonAsync<ApplicationResponse>())!.Id;
 
         var response = await applicant.PostAsync($"/applications/{loanId}/start-review", null);
@@ -726,7 +878,7 @@ public class ApplicationsControllerTests : IDisposable
             5000m);
         await applicant.PostAsJsonAsync("/applications/profile", profile);
         var loan = await applicant.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(10000m, 12, "Car"));
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Personal));
         var loanId = (await loan.Content.ReadFromJsonAsync<ApplicationResponse>())!.Id;
 
         var adminClient = await GetAdminClientAsync();
@@ -747,7 +899,7 @@ public class ApplicationsControllerTests : IDisposable
             5000m);
         await applicant.PostAsJsonAsync("/applications/profile", profile);
         var loan = await applicant.PostAsJsonAsync("/applications",
-            new CreateApplicationRequest(10000m, 12, "Car"));
+            new CreateApplicationRequest(10000m, 12, "Car", LoanType.Personal));
         var loanId = (await loan.Content.ReadFromJsonAsync<ApplicationResponse>())!.Id;
 
         var adminClient = await GetAdminClientAsync();

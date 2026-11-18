@@ -14,6 +14,7 @@ public class Loan
         decimal amount,
         int termMonths,
         string purpose,
+        LoanType loanType,
         DateTime nowUtc)
     {
         if (amount <= 0)
@@ -22,6 +23,8 @@ public class Loan
             throw new ArgumentOutOfRangeException(nameof(termMonths), "Term must be greater than zero.");
         if (string.IsNullOrWhiteSpace(purpose))
             throw new ArgumentException("Purpose is required.", nameof(purpose));
+        if (!Enum.IsDefined(loanType))
+            throw new ArgumentOutOfRangeException(nameof(loanType), "Unknown loan type.");
         RequireUtc(nowUtc, nameof(nowUtc));
 
         var loan = new Loan
@@ -31,6 +34,7 @@ public class Loan
             Amount = amount,
             TermMonths = termMonths,
             Purpose = purpose.Trim(),
+            LoanType = loanType,
             Status = LoanStatus.Submitted,
             CreatedAt = nowUtc
         };
@@ -49,10 +53,26 @@ public class Loan
     public decimal Amount { get; private set; }
     public int TermMonths { get; private set; }
     public string Purpose { get; private set; } = null!;
+    public LoanType LoanType { get; private set; }
+    public Guid? AssignedOfficerUserId { get; private set; }
     public LoanStatus Status { get; private set; }
     public DateTime CreatedAt { get; private set; } // UTC
 
     public IReadOnlyCollection<StatusHistory> History => _history.AsReadOnly();
+
+    /// <summary>
+    /// Assigns the application to an officer exactly once. Redelivery of the same
+    /// assignment is a no-op so the worker can retry safely.
+    /// </summary>
+    public void AssignOfficer(Guid officerUserId)
+    {
+        if (AssignedOfficerUserId == officerUserId)
+            return;
+        if (AssignedOfficerUserId is not null)
+            throw new InvalidOperationException("Application is already assigned to another officer.");
+
+        AssignedOfficerUserId = officerUserId;
+    }
 
     public void StartReview(Guid officerUserId, DateTime nowUtc)
         => ChangeStatus(LoanStatus.UnderReview, officerUserId, nowUtc, note: null);

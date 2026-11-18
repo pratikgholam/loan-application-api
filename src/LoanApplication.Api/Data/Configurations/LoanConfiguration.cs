@@ -13,8 +13,16 @@ public class LoanConfiguration : IEntityTypeConfiguration<Loan>
 
         builder.Property(l => l.Amount).HasPrecision(18, 2);
         builder.Property(l => l.Purpose).IsRequired().HasMaxLength(500);
+        builder.Property(l => l.LoanType).HasConversion<string>().HasMaxLength(20).IsRequired()
+            .HasDefaultValue(LoanType.Personal).HasSentinel((LoanType)0);
         builder.Property(l => l.Status).HasConversion<string>().HasMaxLength(20).IsRequired().IsConcurrencyToken();
         builder.HasIndex(l => l.Status); // used by the filtered list endpoint
+        builder.HasIndex(l => l.AssignedOfficerUserId); // used by the officer's own list
+
+        builder.HasOne<User>()
+            .WithMany()
+            .HasForeignKey(l => l.AssignedOfficerUserId)
+            .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasOne(l => l.Applicant)
             .WithMany(a => a.Loans)

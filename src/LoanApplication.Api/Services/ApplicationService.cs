@@ -1,6 +1,7 @@
 using LoanApplication.Api.Data;
 using LoanApplication.Api.DTOs;
 using LoanApplication.Api.Entities;
+using LoanApplication.Api.Messaging;
 using Microsoft.EntityFrameworkCore;
 
 namespace LoanApplication.Api.Services;
@@ -8,10 +9,14 @@ namespace LoanApplication.Api.Services;
 public sealed class ApplicationService : IApplicationService
 {
     private readonly AppDbContext _db;
+    private readonly ILoanSubmittedPublisher _publisher;
+    private readonly ILogger<ApplicationService> _logger;
 
-    public ApplicationService(AppDbContext db)
+    public ApplicationService(AppDbContext db, ILoanSubmittedPublisher publisher, ILogger<ApplicationService> logger)
     {
         _db = db;
+        _publisher = publisher;
+        _logger = logger;
     }
 
     public async Task<ApplicationResponse> CreateAsync(Guid applicantUserId, CreateApplicationRequest request, DateTime nowUtc, CancellationToken ct)
@@ -31,10 +36,23 @@ public sealed class ApplicationService : IApplicationService
             request.Amount,
             request.TermMonths,
             request.Purpose,
+            request.LoanType!.Value,
             nowUtc);
 
         _db.Loans.Add(loan);
         await _db.SaveChangesAsync(ct);
+
+        // Saved first, then published. A publish failure must not fail the submission:
+        // the loan stays saved and unassigned for a human or a future sweep to pick up.
+        try
+        {
+            await _publisher.PublishAsync(new LoanSubmitted(loan.Id, loan.LoanType), ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex,
+                "Loan {LoanId} was saved but could not be published for assignment.", loan.Id);
+        }
 
         return MapToResponse(loan);
     }
@@ -70,10 +88,16 @@ public sealed class ApplicationService : IApplicationService
         return MapToResponse(loan);
     }
 
-    public async Task<PagedApplicationsResponse> GetPagedAsync(GetApplicationsQuery query, CancellationToken ct)
+    public async Task<PagedApplicationsResponse> GetPagedAsync(GetApplicationsQuery query, Guid? assignedToOfficerId, CancellationToken ct)
     {
         // No Include needed: the summary mapping uses only scalar Loan properties.
         var queryable = _db.Loans.AsQueryable();
+
+        // A loan officer sees only their own assignments; admins pass null and see all.
+        if (assignedToOfficerId.HasValue)
+        {
+            queryable = queryable.Where(l => l.AssignedOfficerUserId == assignedToOfficerId.Value);
+        }
 
         if (query.Status.HasValue)
         {
@@ -99,13 +123,17 @@ public sealed class ApplicationService : IApplicationService
         );
     }
 
-    public async Task<ApplicationResponse> StartReviewAsync(Guid officerUserId, Guid loanId, DateTime nowUtc, CancellationToken ct)
+    public async Task<ApplicationResponse> StartReviewAsync(Guid officerUserId, Guid loanId, bool isAdmin, DateTime nowUtc, CancellationToken ct)
     {
         var loan = await _db.Loans
             .Include(l => l.History)
             .FirstOrDefaultAsync(l => l.Id == loanId, ct);
 
         if (loan is null)
+            throw new KeyNotFoundException("Loan not found.");
+
+        // Officers may only act on their own assignments; admins act on any loan.
+        if (!isAdmin && loan.AssignedOfficerUserId is not null && loan.AssignedOfficerUserId != officerUserId)
             throw new KeyNotFoundException("Loan not found.");
 
         loan.StartReview(officerUserId, nowUtc);
@@ -123,13 +151,16 @@ public sealed class ApplicationService : IApplicationService
         return MapToResponse(loan);
     }
 
-    public async Task<ApplicationResponse> ReviewAsync(Guid officerUserId, Guid loanId, ReviewApplicationRequest request, DateTime nowUtc, CancellationToken ct)
+    public async Task<ApplicationResponse> ReviewAsync(Guid officerUserId, Guid loanId, ReviewApplicationRequest request, bool isAdmin, DateTime nowUtc, CancellationToken ct)
     {
         var loan = await _db.Loans
             .Include(l => l.History)
             .FirstOrDefaultAsync(l => l.Id == loanId, ct);
 
         if (loan is null)
+            throw new KeyNotFoundException("Loan not found.");
+
+        if (!isAdmin && loan.AssignedOfficerUserId is not null && loan.AssignedOfficerUserId != officerUserId)
             throw new KeyNotFoundException("Loan not found.");
 
         // Defense-in-depth: [ApiController] model validation rejects a missing Approve
@@ -195,7 +226,9 @@ public sealed class ApplicationService : IApplicationService
             loan.Amount,
             loan.TermMonths,
             loan.Purpose,
+            loan.LoanType,
             loan.Status,
+            loan.AssignedOfficerUserId,
             loan.CreatedAt,
             loan.History.Select(h => new StatusHistoryDto(h.FromStatus, h.ToStatus, h.ChangedByUserId, h.ChangedAt, h.Note)).ToList()
         );
